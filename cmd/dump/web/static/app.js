@@ -4,6 +4,29 @@
     if (!blobEl) return;
     const data = JSON.parse(blobEl.textContent || "{}");
 
+    const HANDLE_PREFIX = "@";
+    const TEXT_UNKNOWN = "Unknown";
+    const TEXT_FOLLOW = "Follow";
+    const TEXT_MUTED = "Muted";
+    const TEXT_BLOCKED = "Blocked";
+    const TEXT_NONE = "None";
+    const CLASS_ACCOUNT_LIST = "account-list";
+    const CLASS_ACCOUNT_CARD = "account-card";
+    const CLASS_ACCOUNT_CARD_MAIN = "account-card-main";
+    const CLASS_ACCOUNT_CARD_LINK = "account-card-link";
+    const CLASS_ACCOUNT_DISPLAY = "account-display";
+    const CLASS_ACCOUNT_HANDLE = "account-handle";
+    const CLASS_ACCOUNT_META = "account-meta";
+    const CLASS_BADGE_MUTED = "badge badge-muted";
+    const CLASS_BADGE_BLOCKED = "badge badge-block";
+    const CLASS_BUTTON = "btn";
+    const CLASS_MUTED_TEXT = "muted";
+    const PROFILE_BASE_URL = "https://twitter.com/";
+    const PROFILE_ID_BASE_URL = "https://twitter.com/i/user/";
+    const FOLLOW_SCREEN_NAME_URL = "https://twitter.com/intent/follow?screen_name=";
+    const FOLLOW_ACCOUNT_ID_URL = "https://twitter.com/intent/user?user_id=";
+    const NONE_PLACEHOLDER_HTML = "<p class='" + CLASS_MUTED_TEXT + "'>" + TEXT_NONE + "</p>";
+
     function indexById(arr) {
         const map = new Map();
         for (const rec of (arr || [])) {
@@ -16,10 +39,12 @@
     const A = {
         followers: indexById(data?.A?.followers || []),
         following: indexById(data?.A?.following || []),
+        meta: createMetaLookup(data?.A?.muted || [], data?.A?.blocked || []),
     };
     const B = {
         followers: indexById(data?.B?.followers || []),
         following: indexById(data?.B?.following || []),
+        meta: createMetaLookup(data?.B?.muted || [], data?.B?.blocked || []),
     };
 
     // ----- set helpers -----
@@ -53,44 +78,85 @@
         return out;
     }
 
-    // ----- URL + rendering helpers -----
-    function toProfileURL(r) {
-        return r.UserName
-            ? "https://twitter.com/" + r.UserName
-            : "https://twitter.com/i/user/" + r.AccountID;
+    function createMetaLookup(mutedIDs, blockedIDs) {
+        const mutedSet = new Set(mutedIDs || []);
+        const blockedSet = new Set(blockedIDs || []);
+        return {
+            isMuted(accountID) {
+                return mutedSet.has(accountID);
+            },
+            isBlocked(accountID) {
+                return blockedSet.has(accountID);
+            },
+        };
     }
-    function toFollowIntentURL(r) {
-        return r.UserName
-            ? "https://twitter.com/intent/follow?screen_name=" + encodeURIComponent(r.UserName)
-            : "https://twitter.com/intent/user?user_id=" + encodeURIComponent(r.AccountID);
+
+    // ----- URL + rendering helpers -----
+    function toProfileURL(record) {
+        return record.UserName
+            ? PROFILE_BASE_URL + record.UserName
+            : PROFILE_ID_BASE_URL + record.AccountID;
+    }
+    function toFollowIntentURL(record) {
+        return record.UserName
+            ? FOLLOW_SCREEN_NAME_URL + encodeURIComponent(record.UserName)
+            : FOLLOW_ACCOUNT_ID_URL + encodeURIComponent(record.AccountID);
     }
     function escapeHTML(s) {
         return (s || "").replace(/[&<>\"']/g, m => ({
             "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
         }[m]));
     }
-    function label(r) {
-        if (r.DisplayName && r.UserName) return `${escapeHTML(r.DisplayName)} (@${escapeHTML(r.UserName)})`;
-        if (r.DisplayName) return escapeHTML(r.DisplayName);
-        if (r.UserName) return `@${escapeHTML(r.UserName)}`;
-        return escapeHTML(r.AccountID);
+    function displayText(record) {
+        const display = (record.DisplayName || "").trim();
+        if (display) return display;
+        const handle = (record.UserName || "").trim();
+        if (handle) return HANDLE_PREFIX + handle;
+        if (record.AccountID) return record.AccountID;
+        return TEXT_UNKNOWN;
+    }
+    function handleText(record) {
+        const handle = (record.UserName || "").trim();
+        return handle ? HANDLE_PREFIX + handle : "";
+    }
+    function computeFlags(accountID, lookups) {
+        const sources = lookups || [];
+        return {
+            muted: sources.some(lookup => lookup && lookup.isMuted(accountID)),
+            blocked: sources.some(lookup => lookup && lookup.isBlocked(accountID)),
+        };
     }
 
     // Render list; when `withFollow` is true, add a Follow intent button
-    function renderList(records, withFollow) {
+    function renderList(records, withFollow, metaLookups) {
         const host = document.getElementById("cmpOut");
         if (!host) return;
         if (!(records && records.length)) {
-            host.innerHTML = '<p class="muted">None</p>';
+            host.innerHTML = NONE_PLACEHOLDER_HTML;
             return;
         }
-        const items = records.map(r => {
-            const profile = `<a target="_blank" rel="noopener" href="${escapeHTML(toProfileURL(r))}">${label(r)}</a>`;
-            if (!withFollow) return `<li>${profile}</li>`;
-            const followURL = escapeHTML(toFollowIntentURL(r));
-            return `<li>${profile} — <a class="btn" target="_blank" rel="noopener" href="${followURL}">Follow</a></li>`;
+        const items = records.map(record => {
+            const profileURL = escapeHTML(toProfileURL(record));
+            const displayHTML = `<strong class="${CLASS_ACCOUNT_DISPLAY}">${escapeHTML(displayText(record))}</strong>`;
+            const linkHTML = `<a class="${CLASS_ACCOUNT_CARD_LINK}" target="_blank" rel="noopener" href="${profileURL}">${displayHTML}</a>`;
+            const handleValue = handleText(record);
+            const handleHTML = handleValue ? `<span class="${CLASS_ACCOUNT_HANDLE}">${escapeHTML(handleValue)}</span>` : "";
+            const flags = computeFlags(record.AccountID, metaLookups);
+            const metaPieces = [];
+            if (flags.muted) {
+                metaPieces.push(`<span class="${CLASS_BADGE_MUTED}">${TEXT_MUTED}</span>`);
+            }
+            if (flags.blocked) {
+                metaPieces.push(`<span class="${CLASS_BADGE_BLOCKED}">${TEXT_BLOCKED}</span>`);
+            }
+            if (withFollow) {
+                const followURL = escapeHTML(toFollowIntentURL(record));
+                metaPieces.push(`<a class="${CLASS_BUTTON}" target="_blank" rel="noopener" href="${followURL}">${TEXT_FOLLOW}</a>`);
+            }
+            const metaHTML = metaPieces.length ? `<div class="${CLASS_ACCOUNT_META}">${metaPieces.join("")}</div>` : "";
+            return `<li class="${CLASS_ACCOUNT_CARD}"><div class="${CLASS_ACCOUNT_CARD_MAIN}">${linkHTML}${handleHTML}</div>${metaHTML}</li>`;
         }).join("");
-        host.innerHTML = `<ul class="matrix">${items}</ul>`;
+        host.innerHTML = `<ul class="${CLASS_ACCOUNT_LIST}">${items}</ul>`;
     }
 
     // Decide which operations should show actionable Follow buttons
@@ -103,6 +169,24 @@
                 return true;
             default:
                 return false; // mutual / blocked / symmetric diff → info-only
+        }
+    }
+
+    function metaSourcesForOperation(op) {
+        switch (op) {
+            case "B_following_minus_A_following":
+            case "B_followers_minus_following":
+            case "B_blocked_intersect_following":
+                return [B.meta];
+            case "A_following_minus_B_following":
+            case "A_followers_minus_following":
+            case "A_blocked_intersect_following":
+                return [A.meta];
+            case "mutual_following":
+            case "symdiff_following":
+                return [A.meta, B.meta];
+            default:
+                return [A.meta, B.meta];
         }
     }
 
@@ -138,7 +222,7 @@
                 result = new Map();
         }
         const list = toList(result);
-        renderList(list, isFollowAction(op));
+        renderList(list, isFollowAction(op), metaSourcesForOperation(op));
     }
 
     document.getElementById("runCmp")?.addEventListener("click", runSelected);

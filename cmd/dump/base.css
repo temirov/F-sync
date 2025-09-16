@@ -41,18 +41,57 @@ ul {
     list-style: none
 }
 
-li {
-    padding: 6px 0;
-    border-bottom: 1px solid #f0f0f0
+.account-list {
+    margin-top: 12px
 }
 
-li:last-child {
+.account-card {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 4px;
+    padding: 10px 0;
+    border-bottom: 1px solid #e6e6e6
+}
+
+.account-card:last-child {
     border-bottom: none
 }
 
-.matrix li {
-    font-size: 10px;
-    line-height: 1.2
+.account-card-main {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    width: 100%
+}
+
+.account-card-link {
+    color: inherit;
+    text-decoration: none
+}
+
+.account-card-link:hover .account-display {
+    text-decoration: underline
+}
+
+.account-display {
+    font-weight: 600;
+    font-size: 14px;
+    color: #1c1c1c
+}
+
+.account-handle {
+    font-size: 12px;
+    color: #5f6368
+}
+
+.account-meta {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 11px;
+    color: #333
 }
 
 a {
@@ -68,13 +107,16 @@ a:hover {
     padding: 2px 8px;
     border: 1px solid #ccc;
     border-radius: 12px;
-    margin-left: 8px;
     font-size: 12px;
     text-decoration: none
 }
 
 .btn:hover {
     background: #f5f5f5
+}
+
+.account-meta .btn {
+    margin-left: 0
 }
 
 .muted {
@@ -84,19 +126,22 @@ a:hover {
 
 .badge {
     display: inline-block;
-    padding: 1px 6px;
-    border: 1px solid #bbb;
+    padding: 2px 8px;
     border-radius: 999px;
-    font-size: 10px;
-    margin-left: 6px
+    font-size: 11px;
+    font-weight: 600;
+    background: #f2f3f5;
+    color: #333
 }
 
 .badge-muted {
-    border-color: #888
+    background: #e8edff;
+    color: #4257b2
 }
 
 .badge-block {
-    border-color: #c00
+    background: #fde8e7;
+    color: #b42318
 }
 
 @media (max-width: 900px) {

@@ -45,18 +45,18 @@
 <section>
     <h2>{{ .OwnerA }} — Relationship Matrix</h2>
     <div class="matrix">
-        <div class="cell"><h3>Friends</h3>{{ template "list" .AFriends }}</div>
-        <div class="cell"><h3>Leaders</h3>{{ template "list" .ALeaders }}</div>
-        <div class="cell"><h3>Groupies</h3>{{ template "list" .AGroupies }}</div>
+        <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerALists.Friends }}</div>
+        <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerALists.Leaders }}</div>
+        <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerALists.Groupies }}</div>
     </div>
 </section>
 
 <section>
     <h2>{{ .OwnerB }} — Relationship Matrix</h2>
     <div class="matrix">
-        <div class="cell"><h3>Friends</h3>{{ template "list" .BFriends }}</div>
-        <div class="cell"><h3>Leaders</h3>{{ template "list" .BLeaders }}</div>
-        <div class="cell"><h3>Groupies</h3>{{ template "list" .BGroupies }}</div>
+        <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerBLists.Friends }}</div>
+        <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerBLists.Leaders }}</div>
+        <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerBLists.Groupies }}</div>
     </div>
 </section>
 
@@ -83,16 +83,16 @@
 
 <section>
     <h2>Blocked accounts — {{ .OwnerA }}</h2>
-    <h3 class="sub">Also in Following</h3>{{ template "list" .ABlockedAndFollowing }}
-    <h3 class="sub">Also in Followers</h3>{{ template "list" .ABlockedAndFollowers }}
-    <h3 class="sub">All Blocked</h3>{{ template "list" .ABlockedAll }}
+    <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowing }}
+    <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowers }}
+    <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerALists.BlockedAll }}
 </section>
 
 <section>
     <h2>Blocked accounts — {{ .OwnerB }}</h2>
-    <h3 class="sub">Also in Following</h3>{{ template "list" .BBlockedAndFollowing }}
-    <h3 class="sub">Also in Followers</h3>{{ template "list" .BBlockedAndFollowers }}
-    <h3 class="sub">All Blocked</h3>{{ template "list" .BBlockedAll }}
+    <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowing }}
+    <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowers }}
+    <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerBLists.BlockedAll }}
 </section>
 
 <footer><p>Identity & file paths via manifest.js; follow/blocks/mutes via follower.js, following.js, block.js, mute.js.</p></footer>
@@ -101,17 +101,37 @@
 <script id="matrixData" type="application/json">{{ .MatrixJSON }}</script>
 <script>{{ .JS }}</script>
 
-{{ define "list" }}
-    {{ $list := . }}
-    {{ if not $list }}
+{{ define "accountList" }}
+    {{ $entries := . }}
+    {{ if not $entries }}
         <p class="muted">None</p>
     {{ else }}
-        <ul>
-            {{ range $list }}
-                <li><a target="_blank" rel="noopener" href="{{ profileURL . }}">{{ label . }}</a></li>
+        <ul class="account-list">
+            {{ range $entries }}
+                {{ template "accountCard" . }}
             {{ end }}
         </ul>
     {{ end }}
+{{ end }}
+
+{{ define "accountCard" }}
+    {{ $entry := . }}
+    <li class="account-card">
+        <div class="account-card-main">
+            <a class="account-card-link" target="_blank" rel="noopener" href="{{ $entry.Presentation.ProfileURL }}">
+                <strong class="account-display">{{ $entry.Presentation.Display }}</strong>
+            </a>
+            {{ with $handle := $entry.Presentation.Handle }}
+                <span class="account-handle">{{ $handle }}</span>
+            {{ end }}
+        </div>
+        {{ if or $entry.Muted $entry.Blocked }}
+        <div class="account-meta">
+            {{ if $entry.Muted }}<span class="badge badge-muted">Muted</span>{{ end }}
+            {{ if $entry.Blocked }}<span class="badge badge-block">Blocked</span>{{ end }}
+        </div>
+        {{ end }}
+    </li>
 {{ end }}
 
 </body>

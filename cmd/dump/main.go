@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
 	"context"
 	"embed"
 	"encoding/json"
@@ -81,17 +82,120 @@ type pageVM struct {
 		B struct{ Followers, Following, Friends, Leaders, Groupies, Muted, Blocked int }
 	}
 
-	AFriends, ALeaders, AGroupies []AccountRecord
-	BFriends, BLeaders, BGroupies []AccountRecord
-
-	ABlockedAll, ABlockedAndFollowing, ABlockedAndFollowers []AccountRecord
-	BBlockedAll, BBlockedAndFollowing, BBlockedAndFollowers []AccountRecord
+	OwnerALists ownerListViewModel
+	OwnerBLists ownerListViewModel
 
 	// JSON blob consumed by app.js (kept separate from HTML)
 	MatrixJSON template.JS
 	// Inline assets from embed (so the output is a single HTML file)
 	CSS template.CSS
 	JS  template.JS
+}
+
+const (
+	templateBaseName       = "base"
+	templateIndexFile      = "web/templates/index.tmpl"
+	templateIndexName      = "index.tmpl"
+	embeddedBaseCSSPath    = "web/static/base.css"
+	embeddedAppJSPath      = "web/static/app.js"
+	twitterUserNameBaseURL = "https://twitter.com/"
+	twitterUserIDBaseURL   = "https://twitter.com/i/user/"
+	accountHandlePrefix    = "@"
+	displayHandleFormat    = "%s (%s%s)"
+	pageTitleText          = "Twitter Relationship Matrix"
+	unknownLabelText       = "Unknown"
+	embedReadErrorFormat   = "embed read %s: %w"
+)
+
+type ownerListViewModel struct {
+	Friends             []accountCardTemplateData
+	Leaders             []accountCardTemplateData
+	Groupies            []accountCardTemplateData
+	BlockedAll          []accountCardTemplateData
+	BlockedAndFollowing []accountCardTemplateData
+	BlockedAndFollowers []accountCardTemplateData
+}
+
+type accountCardTemplateData struct {
+	Presentation accountPresentation
+	Muted        bool
+	Blocked      bool
+}
+
+type accountPresentation struct {
+	record AccountRecord
+}
+
+func newAccountPresentation(record AccountRecord) accountPresentation {
+	return accountPresentation{record: record}
+}
+
+func (presentation accountPresentation) Display() string {
+	display := strings.TrimSpace(presentation.record.DisplayName)
+	if display != "" {
+		return display
+	}
+	handle := strings.TrimSpace(presentation.record.UserName)
+	if handle != "" {
+		return accountHandlePrefix + handle
+	}
+	if presentation.record.AccountID != "" {
+		return presentation.record.AccountID
+	}
+	return unknownLabelText
+}
+
+func (presentation accountPresentation) Handle() string {
+	handle := strings.TrimSpace(presentation.record.UserName)
+	if handle == "" {
+		return ""
+	}
+	return accountHandlePrefix + handle
+}
+
+func (presentation accountPresentation) ProfileURL() string {
+	if strings.TrimSpace(presentation.record.UserName) != "" {
+		return twitterUserNameBaseURL + presentation.record.UserName
+	}
+	return twitterUserIDBaseURL + presentation.record.AccountID
+}
+
+type accountBadgeDecorator struct {
+	mutedIDs   map[string]bool
+	blockedIDs map[string]bool
+}
+
+func newAccountBadgeDecorator(mutedIDs map[string]bool, blockedIDs map[string]bool) accountBadgeDecorator {
+	return accountBadgeDecorator{mutedIDs: mutedIDs, blockedIDs: blockedIDs}
+}
+
+func (decorator accountBadgeDecorator) Decorate(records []AccountRecord) []accountCardTemplateData {
+	if len(records) == 0 {
+		return nil
+	}
+	decorated := make([]accountCardTemplateData, 0, len(records))
+	for _, record := range records {
+		decorated = append(decorated, accountCardTemplateData{
+			Presentation: newAccountPresentation(record),
+			Muted:        decorator.isMuted(record.AccountID),
+			Blocked:      decorator.isBlocked(record.AccountID),
+		})
+	}
+	return decorated
+}
+
+func (decorator accountBadgeDecorator) isMuted(accountID string) bool {
+	if decorator.mutedIDs == nil {
+		return false
+	}
+	return decorator.mutedIDs[accountID]
+}
+
+func (decorator accountBadgeDecorator) isBlocked(accountID string) bool {
+	if decorator.blockedIDs == nil {
+		return false
+	}
+	return decorator.blockedIDs[accountID]
 }
 
 // ------------------------------- main -----------------------------------
@@ -211,11 +315,96 @@ func main() {
 
 	comp := buildComparison(aSets, bSets, aOwner, bOwner)
 
-	// Prepare assets
-	css := readEmbedText("web/static/base.css")
-	js := readEmbedText("web/static/app.js")
+	pageHTML, err := RenderComparisonPage(comp)
+	if err != nil {
+		dief("render: %v", err)
+	}
 
-	// Prepare matrix JSON for client-side ops
+	f, err := os.Create(out)
+	if err != nil {
+		dief("create %s: %v", out, err)
+	}
+	defer f.Close()
+
+	if _, err := f.WriteString(pageHTML); err != nil {
+		dief("write %s: %v", out, err)
+	}
+
+	fmt.Println("Wrote", out)
+}
+
+// RenderComparisonPage assembles the HTML output using the embedded assets and templates.
+func RenderComparisonPage(comp ComparisonResult) (string, error) {
+	cssText, err := embeddedText(embeddedBaseCSSPath)
+	if err != nil {
+		return "", err
+	}
+	jsText, err := embeddedText(embeddedAppJSPath)
+	if err != nil {
+		return "", err
+	}
+	matrixJSON, err := buildMatrixJSON(comp)
+	if err != nil {
+		return "", err
+	}
+	viewModel := newPageViewModel(comp, cssText, jsText, matrixJSON)
+	tmpl, err := parseTemplates(embeddedFS, templateIndexFile)
+	if err != nil {
+		return "", fmt.Errorf("template parse: %w", err)
+	}
+	var buffer bytes.Buffer
+	if err := tmpl.ExecuteTemplate(&buffer, templateIndexName, viewModel); err != nil {
+		return "", fmt.Errorf("template execute: %w", err)
+	}
+	return buffer.String(), nil
+}
+
+func newPageViewModel(comp ComparisonResult, cssText string, jsText string, matrixJSON string) pageVM {
+	ownerADecorator := newAccountBadgeDecorator(comp.AccountSetsA.Muted, comp.AccountSetsA.Blocked)
+	ownerBDecorator := newAccountBadgeDecorator(comp.AccountSetsB.Muted, comp.AccountSetsB.Blocked)
+
+	vm := pageVM{
+		Title:  pageTitleText,
+		OwnerA: ownerPretty(comp.OwnerA),
+		OwnerB: ownerPretty(comp.OwnerB),
+		OwnerALists: ownerListViewModel{
+			Friends:             ownerADecorator.Decorate(comp.OwnerAFriends),
+			Leaders:             ownerADecorator.Decorate(comp.OwnerALeaders),
+			Groupies:            ownerADecorator.Decorate(comp.OwnerAGroupies),
+			BlockedAll:          ownerADecorator.Decorate(comp.OwnerABlockedAll),
+			BlockedAndFollowing: ownerADecorator.Decorate(comp.OwnerABlockedAndFollowing),
+			BlockedAndFollowers: ownerADecorator.Decorate(comp.OwnerABlockedAndFollowers),
+		},
+		OwnerBLists: ownerListViewModel{
+			Friends:             ownerBDecorator.Decorate(comp.OwnerBFriends),
+			Leaders:             ownerBDecorator.Decorate(comp.OwnerBLeaders),
+			Groupies:            ownerBDecorator.Decorate(comp.OwnerBGroupies),
+			BlockedAll:          ownerBDecorator.Decorate(comp.OwnerBBlockedAll),
+			BlockedAndFollowing: ownerBDecorator.Decorate(comp.OwnerBBlockedAndFollowing),
+			BlockedAndFollowers: ownerBDecorator.Decorate(comp.OwnerBBlockedAndFollowers),
+		},
+		MatrixJSON: template.JS(matrixJSON),
+		CSS:        template.CSS(cssText),
+		JS:         template.JS(jsText),
+	}
+	vm.Counts.A.Followers = len(comp.OwnerAFollowersAll)
+	vm.Counts.A.Following = len(comp.OwnerAFollowingsAll)
+	vm.Counts.A.Friends = len(comp.OwnerAFriends)
+	vm.Counts.A.Leaders = len(comp.OwnerALeaders)
+	vm.Counts.A.Groupies = len(comp.OwnerAGroupies)
+	vm.Counts.A.Muted = len(comp.AccountSetsA.Muted)
+	vm.Counts.A.Blocked = len(comp.AccountSetsA.Blocked)
+	vm.Counts.B.Followers = len(comp.OwnerBFollowersAll)
+	vm.Counts.B.Following = len(comp.OwnerBFollowingsAll)
+	vm.Counts.B.Friends = len(comp.OwnerBFriends)
+	vm.Counts.B.Leaders = len(comp.OwnerBLeaders)
+	vm.Counts.B.Groupies = len(comp.OwnerBGroupies)
+	vm.Counts.B.Muted = len(comp.AccountSetsB.Muted)
+	vm.Counts.B.Blocked = len(comp.AccountSetsB.Blocked)
+	return vm
+}
+
+func buildMatrixJSON(comp ComparisonResult) (string, error) {
 	matrix := struct {
 		OwnerA string `json:"ownerA"`
 		OwnerB string `json:"ownerB"`
@@ -243,58 +432,12 @@ func main() {
 	matrix.B.Following = comp.OwnerBFollowingsAll
 	matrix.B.Muted = mapKeys(comp.AccountSetsB.Muted)
 	matrix.B.Blocked = mapKeys(comp.AccountSetsB.Blocked)
-	matrixJSON, _ := json.Marshal(matrix)
 
-	vm := pageVM{
-		Title:  "Twitter Relationship Matrix",
-		OwnerA: ownerPretty(comp.OwnerA),
-		OwnerB: ownerPretty(comp.OwnerB),
-
-		AFriends: comp.OwnerAFriends, ALeaders: comp.OwnerALeaders, AGroupies: comp.OwnerAGroupies,
-		BFriends: comp.OwnerBFriends, BLeaders: comp.OwnerBLeaders, BGroupies: comp.OwnerBGroupies,
-
-		ABlockedAll:          comp.OwnerABlockedAll,
-		ABlockedAndFollowing: comp.OwnerABlockedAndFollowing,
-		ABlockedAndFollowers: comp.OwnerABlockedAndFollowers,
-
-		BBlockedAll:          comp.OwnerBBlockedAll,
-		BBlockedAndFollowing: comp.OwnerBBlockedAndFollowing,
-		BBlockedAndFollowers: comp.OwnerBBlockedAndFollowers,
-
-		MatrixJSON: template.JS(matrixJSON),
-		CSS:        template.CSS(css),
-		JS:         template.JS(js),
-	}
-	vm.Counts.A.Followers = len(comp.OwnerAFollowersAll)
-	vm.Counts.A.Following = len(comp.OwnerAFollowingsAll)
-	vm.Counts.A.Friends = len(comp.OwnerAFriends)
-	vm.Counts.A.Leaders = len(comp.OwnerALeaders)
-	vm.Counts.A.Groupies = len(comp.OwnerAGroupies)
-	vm.Counts.A.Muted = len(comp.AccountSetsA.Muted)
-	vm.Counts.A.Blocked = len(comp.AccountSetsA.Blocked)
-	vm.Counts.B.Followers = len(comp.OwnerBFollowersAll)
-	vm.Counts.B.Following = len(comp.OwnerBFollowingsAll)
-	vm.Counts.B.Friends = len(comp.OwnerBFriends)
-	vm.Counts.B.Leaders = len(comp.OwnerBLeaders)
-	vm.Counts.B.Groupies = len(comp.OwnerBGroupies)
-	vm.Counts.B.Muted = len(comp.AccountSetsB.Muted)
-	vm.Counts.B.Blocked = len(comp.AccountSetsB.Blocked)
-
-	// Render template
-	t := mustParseTemplates(embeddedFS, "web/templates/index.tmpl")
-	f, err := os.Create(out)
+	encoded, err := json.Marshal(matrix)
 	if err != nil {
-		dief("create %s: %v", out, err)
+		return "", fmt.Errorf("marshal matrix: %w", err)
 	}
-	defer f.Close()
-
-	// Execute the named template ("index.tmpl") rather than the unnamed root.
-	name := filepath.Base("web/templates/index.tmpl")
-	if err := t.ExecuteTemplate(f, name, vm); err != nil {
-		dief("render: %v", err)
-	}
-
-	fmt.Println("Wrote", out)
+	return string(encoded), nil
 }
 
 // ----------------------------- helpers ----------------------------------
@@ -304,45 +447,58 @@ func dief(format string, args ...any) {
 	os.Exit(1)
 }
 
-func readEmbedText(path string) string {
-	b, err := fs.ReadFile(embeddedFS, path)
+func embeddedText(path string) (string, error) {
+	content, err := fs.ReadFile(embeddedFS, path)
 	if err != nil {
-		dief("embed read %s: %v", path, err)
+		return "", fmt.Errorf(embedReadErrorFormat, path, err)
 	}
-	return string(b)
+	return string(content), nil
 }
 
-func mustParseTemplates(fsys fs.FS, files ...string) *template.Template {
-	// Give the root a non-empty name to avoid unnamed-template pitfalls.
-	t := template.New("base").Funcs(template.FuncMap{
-		"profileURL": func(r AccountRecord) string {
-			if r.UserName != "" {
-				return "https://twitter.com/" + r.UserName
-			}
-			return "https://twitter.com/i/user/" + r.AccountID
+func readEmbedText(path string) string {
+	content, err := embeddedText(path)
+	if err != nil {
+		dief("%v", err)
+	}
+	return content
+}
+
+func parseTemplates(fsys fs.FS, files ...string) (*template.Template, error) {
+	tmpl := template.New(templateBaseName).Funcs(template.FuncMap{
+		"profileURL": func(record AccountRecord) string {
+			return newAccountPresentation(record).ProfileURL()
 		},
-		"label": func(r AccountRecord) string {
-			d := strings.TrimSpace(r.DisplayName)
-			h := strings.TrimSpace(r.UserName)
+		"label": func(record AccountRecord) string {
+			display := strings.TrimSpace(record.DisplayName)
+			handle := strings.TrimSpace(record.UserName)
 			switch {
-			case d != "" && h != "":
-				return fmt.Sprintf("%s (@%s)", d, h)
-			case d != "":
-				return d
-			case h != "":
-				return "@" + h
+			case display != "" && handle != "":
+				return fmt.Sprintf(displayHandleFormat, display, accountHandlePrefix, handle)
+			case display != "":
+				return display
+			case handle != "":
+				return accountHandlePrefix + handle
+			case record.AccountID != "":
+				return record.AccountID
 			default:
-				return r.AccountID
+				return unknownLabelText
 			}
 		},
 		"has": func(m map[string]bool, id string) bool { return m[id] },
 	})
-	var err error
-	t, err = t.ParseFS(fsys, files...)
+	parsed, err := tmpl.ParseFS(fsys, files...)
+	if err != nil {
+		return nil, err
+	}
+	return parsed, nil
+}
+
+func mustParseTemplates(fsys fs.FS, files ...string) *template.Template {
+	parsed, err := parseTemplates(fsys, files...)
 	if err != nil {
 		dief("template parse: %v", err)
 	}
-	return t
+	return parsed
 }
 
 func mapKeys(m map[string]bool) []string {
@@ -355,19 +511,19 @@ func mapKeys(m map[string]bool) []string {
 }
 
 func ownerPretty(o OwnerIdentity) string {
-	d := strings.TrimSpace(o.DisplayName)
-	h := strings.TrimSpace(o.UserName)
+	display := strings.TrimSpace(o.DisplayName)
+	handle := strings.TrimSpace(o.UserName)
 	switch {
-	case d != "" && h != "":
-		return fmt.Sprintf("%s (@%s)", d, h)
-	case d != "":
-		return d
-	case h != "":
-		return "@" + h
+	case display != "" && handle != "":
+		return fmt.Sprintf(displayHandleFormat, display, accountHandlePrefix, handle)
+	case display != "":
+		return display
+	case handle != "":
+		return accountHandlePrefix + handle
 	case o.AccountID != "":
 		return o.AccountID
 	default:
-		return "Unknown"
+		return unknownLabelText
 	}
 }
 
