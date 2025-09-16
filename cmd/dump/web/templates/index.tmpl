@@ -1,0 +1,118 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{{ .Title }}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>{{ .CSS }}</style>
+</head>
+<body>
+<header>
+    <h1>Twitter Relationship Matrix</h1>
+    <p>Offline analysis from two archives. No API calls.</p>
+</header>
+
+<section>
+    <h2>Overview</h2>
+    <div class="grid">
+        <div>
+            <h3>{{ .OwnerA }}</h3>
+            <ul>
+                <li>Followers: {{ .Counts.A.Followers }}</li>
+                <li>Followings: {{ .Counts.A.Following }}</li>
+                <li>Friends: {{ .Counts.A.Friends }}</li>
+                <li>Leaders: {{ .Counts.A.Leaders }}</li>
+                <li>Groupies: {{ .Counts.A.Groupies }}</li>
+                <li>Muted: {{ .Counts.A.Muted }}</li>
+                <li>Blocked: {{ .Counts.A.Blocked }}</li>
+            </ul>
+        </div>
+        <div>
+            <h3>{{ .OwnerB }}</h3>
+            <ul>
+                <li>Followers: {{ .Counts.B.Followers }}</li>
+                <li>Followings: {{ .Counts.B.Following }}</li>
+                <li>Friends: {{ .Counts.B.Friends }}</li>
+                <li>Leaders: {{ .Counts.B.Leaders }}</li>
+                <li>Groupies: {{ .Counts.B.Groupies }}</li>
+                <li>Muted: {{ .Counts.B.Muted }}</li>
+                <li>Blocked: {{ .Counts.B.Blocked }}</li>
+            </ul>
+        </div>
+    </div>
+</section>
+
+<section>
+    <h2>{{ .OwnerA }} — Relationship Matrix</h2>
+    <div class="matrix">
+        <div class="cell"><h3>Friends</h3>{{ template "list" .AFriends }}</div>
+        <div class="cell"><h3>Leaders</h3>{{ template "list" .ALeaders }}</div>
+        <div class="cell"><h3>Groupies</h3>{{ template "list" .AGroupies }}</div>
+    </div>
+</section>
+
+<section>
+    <h2>{{ .OwnerB }} — Relationship Matrix</h2>
+    <div class="matrix">
+        <div class="cell"><h3>Friends</h3>{{ template "list" .BFriends }}</div>
+        <div class="cell"><h3>Leaders</h3>{{ template "list" .BLeaders }}</div>
+        <div class="cell"><h3>Groupies</h3>{{ template "list" .BGroupies }}</div>
+    </div>
+</section>
+
+<!-- Removed the static “B follows that A doesn’t” section -->
+
+<section>
+    <h2>On-the-fly comparisons</h2>
+    <div>
+        <label for="cmpOp">Operation:</label>
+        <select id="cmpOp">
+            <option value="B_following_minus_A_following">{{ .OwnerB }} follows that {{ .OwnerA }} doesn’t</option>
+            <option value="A_following_minus_B_following">{{ .OwnerA }} follows that {{ .OwnerB }} doesn’t</option>
+            <option value="mutual_following">Mutual following (Friends of {{ .OwnerA }} & {{ .OwnerB }})</option>
+            <option value="A_followers_minus_following">{{ .OwnerA }}’s followers not followed by {{ .OwnerA }}</option>
+            <option value="B_followers_minus_following">{{ .OwnerB }}’s followers not followed by {{ .OwnerB }}</option>
+            <option value="A_blocked_intersect_following">{{ .OwnerA }}: Blocked ∩ Following</option>
+            <option value="B_blocked_intersect_following">{{ .OwnerB }}: Blocked ∩ Following</option>
+            <option value="symdiff_following">Symmetric diff (Following of {{ .OwnerA }} vs {{ .OwnerB }})</option>
+        </select>
+        <button id="runCmp">Run</button>
+    </div>
+    <div id="cmpOut" class="cell" style="margin-top:12px"></div>
+</section>
+
+<section>
+    <h2>Blocked accounts — {{ .OwnerA }}</h2>
+    <h3 class="sub">Also in Following</h3>{{ template "list" .ABlockedAndFollowing }}
+    <h3 class="sub">Also in Followers</h3>{{ template "list" .ABlockedAndFollowers }}
+    <h3 class="sub">All Blocked</h3>{{ template "list" .ABlockedAll }}
+</section>
+
+<section>
+    <h2>Blocked accounts — {{ .OwnerB }}</h2>
+    <h3 class="sub">Also in Following</h3>{{ template "list" .BBlockedAndFollowing }}
+    <h3 class="sub">Also in Followers</h3>{{ template "list" .BBlockedAndFollowers }}
+    <h3 class="sub">All Blocked</h3>{{ template "list" .BBlockedAll }}
+</section>
+
+<footer><p>Identity & file paths via manifest.js; follow/blocks/mutes via follower.js, following.js, block.js, mute.js.</p></footer>
+
+<!-- Data blob for JS (keeps JS code generic) -->
+<script id="matrixData" type="application/json">{{ .MatrixJSON }}</script>
+<script>{{ .JS }}</script>
+
+{{ define "list" }}
+    {{ $list := . }}
+    {{ if not $list }}
+        <p class="muted">None</p>
+    {{ else }}
+        <ul>
+            {{ range $list }}
+                <li><a target="_blank" rel="noopener" href="{{ profileURL . }}">{{ label . }}</a></li>
+            {{ end }}
+        </ul>
+    {{ end }}
+{{ end }}
+
+</body>
+</html>
