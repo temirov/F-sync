@@ -2,6 +2,7 @@ package main
 
 import (
 	"archive/zip"
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+
+	"github.com/f-sync/fsync/internal/handles"
 )
 
 // -------------------- Embed static assets & templates --------------------
@@ -24,11 +27,7 @@ var embeddedFS embed.FS
 
 // ----------------------------- Data models ------------------------------
 
-type AccountRecord struct {
-	AccountID   string
-	UserName    string
-	DisplayName string
-}
+type AccountRecord = handles.AccountRecord
 
 type AccountSets struct {
 	Followers map[string]AccountRecord
@@ -97,11 +96,92 @@ type pageVM struct {
 
 // ------------------------------- main -----------------------------------
 
+const (
+	flagResolveHandlesName        = "resolve-handles"
+	flagResolveHandlesDescription = "Resolve missing handles over the network"
+	handleResolutionErrorFormat   = "warning: handle lookup for %s failed: %v\n"
+	errMessageMissingResolution   = "handle resolution returned no result"
+)
+
+var errMissingHandleResolution = errors.New(errMessageMissingResolution)
+
+// AccountHandleResolver resolves Twitter handles for numeric identifiers.
+type AccountHandleResolver interface {
+	ResolveMany(ctx context.Context, accountIDs []string) map[string]handles.Result
+}
+
+type accountResolutionTarget struct {
+	records map[string]AccountRecord
+}
+
+// MaybeResolveHandles enriches account sets with resolved handles when enabled.
+func MaybeResolveHandles(ctx context.Context, resolver AccountHandleResolver, shouldResolve bool, accountSets ...*AccountSets) map[string]error {
+	if !shouldResolve || resolver == nil {
+		return nil
+	}
+
+	idToTargets := make(map[string][]accountResolutionTarget)
+	for _, accountSet := range accountSets {
+		if accountSet == nil {
+			continue
+		}
+		collectResolutionTargets(accountSet.Followers, idToTargets)
+		collectResolutionTargets(accountSet.Following, idToTargets)
+	}
+	if len(idToTargets) == 0 {
+		return nil
+	}
+
+	accountIDs := make([]string, 0, len(idToTargets))
+	for accountID := range idToTargets {
+		accountIDs = append(accountIDs, accountID)
+	}
+
+	resolutionResults := resolver.ResolveMany(ctx, accountIDs)
+	errorsByID := make(map[string]error)
+	for _, accountID := range accountIDs {
+		result, exists := resolutionResults[accountID]
+		if !exists {
+			errorsByID[accountID] = errMissingHandleResolution
+			continue
+		}
+		if result.Err != nil {
+			errorsByID[accountID] = result.Err
+			continue
+		}
+		for _, target := range idToTargets[accountID] {
+			record := target.records[accountID]
+			if record.UserName == "" {
+				record.UserName = result.Record.UserName
+			}
+			if record.DisplayName == "" {
+				record.DisplayName = result.Record.DisplayName
+			}
+			target.records[accountID] = record
+		}
+	}
+	if len(errorsByID) == 0 {
+		return nil
+	}
+	return errorsByID
+}
+
+func collectResolutionTargets(source map[string]AccountRecord, targets map[string][]accountResolutionTarget) {
+	for accountID, record := range source {
+		if strings.TrimSpace(record.UserName) != "" {
+			continue
+		}
+		targets[accountID] = append(targets[accountID], accountResolutionTarget{records: source})
+	}
+}
+
 func main() {
 	var zipA, zipB, out string
+	var resolveHandles bool
 	flag.StringVar(&zipA, "zip-a", "", "Path to first Twitter data zip")
 	flag.StringVar(&zipB, "zip-b", "", "Path to second Twitter data zip")
 	flag.StringVar(&out, "out", "twitter_relationship_matrix.html", "Output HTML file path")
+	flag.BoolVar(&resolveHandles, flagResolveHandlesName, false, flagResolveHandlesDescription)
 	flag.Parse()
 
 	if zipA == "" || zipB == "" {
@@ -116,6 +196,17 @@ func main() {
 	bSets, bOwner, err := readTwitterZip(zipB)
 	if err != nil {
 		dief("read %s: %v", zipB, err)
+	}
+
+	if resolveHandles {
+		resolver, err := handles.NewResolver(handles.Config{})
+		if err != nil {
+			dief("handles resolver: %v", err)
+		}
+		resolutionErrors := MaybeResolveHandles(context.Background(), resolver, resolveHandles, &aSets, &bSets)
+		for accountID, resolutionErr := range resolutionErrors {
+			fmt.Fprintf(os.Stderr, handleResolutionErrorFormat, accountID, resolutionErr)
+		}
 	}
 
 	comp := buildComparison(aSets, bSets, aOwner, bOwner)

@@ -2,14 +2,15 @@
 
 Generate an offline, human-readable HTML “relationship matrix” by comparing two X/Twitter data-export archives. See at a
 glance who is a **Friend** (mutual), **Leader** (you follow them, they don’t follow you), **Groupie** (they follow you,
-you don’t follow them), plus **diffs** (who B follows that A doesn’t) and **blocked/muted** cross-matches. No API calls,
-no network access — everything runs locally against your export ZIPs.
+you don’t follow them), plus **diffs** (who B follows that A doesn’t) and **blocked/muted** cross-matches. No API calls
+or network access are required unless you opt into handle resolution with `--resolve-handles`.
 
 ---
 
 ## Why this exists
 
-* **Offline, privacy-first**: Works entirely on your exported data (`.zip`); never calls Twitter/X APIs.
+* **Offline, privacy-first**: Works entirely on your exported data (`.zip`) by default; optional handle resolution can
+  contact twitter.com to fill missing handles.
 * **Actionable overview**: Summaries + categorized lists with direct profile/intent links.
 * **Deterministic**: Plain Go code, no heuristics beyond consistent parsing rules.
 
@@ -111,8 +112,24 @@ go build -o twitter_matrix .
 * `--zip-a` Path to the first export ZIP (treated as **A**)
 * `--zip-b` Path to the second export ZIP (treated as **B**)
 * `--out`  Output HTML file (default: `twitter_relationship_matrix.html`)
+* `--resolve-handles` Resolve missing handles/display names by following redirects on twitter.com (optional)
 
 Open the resulting HTML in your browser.
+
+---
+
+### Handle resolution (optional)
+
+Some exports omit screen names for deactivated or protected accounts. When you pass `--resolve-handles`, the tool
+performs HTTPS HEAD/GET requests to `https://twitter.com/i/user/<account_id>` and inspects the redirect to recover the
+handle. It then fetches the redirected page title to extract a display name when available.
+
+* Requests use conservative timeouts and never follow more than the initial redirect.
+* A bounded worker pool (default 8 workers) fans out requests so large exports finish promptly without hammering
+  twitter.com.
+* Results are cached for the lifetime of the process, so repeated IDs are only fetched once.
+
+If the flag is omitted, no network calls are performed and the HTML output still links to the numeric-ID profile URLs.
 
 ---
 
@@ -157,7 +174,7 @@ So edits to `base.css` are picked up on the next build.
 
 ## Security & privacy
 
-* Operates entirely on local files; **no network calls**.
+* Operates entirely on local files by default; `--resolve-handles` performs outbound HTTPS lookups to twitter.com.
 * Does not write anything except the single HTML output file.
 * No token storage, no persistent cache.
 
