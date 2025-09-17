@@ -36,6 +36,8 @@
     const VALUE_STATE_FALSE = "false";
     const TEXT_HIDE = "Hide";
     const TEXT_SHOW = "Show";
+    const OWNER_KEY_PRIMARY = "A";
+    const OWNER_KEY_SECONDARY = "B";
 
     function indexById(arr) {
         const map = new Map();
@@ -44,6 +46,9 @@
         }
         return map;
     }
+
+    const uploadSummaries = Array.isArray(data?.uploads) ? data.uploads : [];
+    const ownerLabelsByKey = createOwnerLabelLookup(uploadSummaries);
 
     // Indexed records for both owners
     const A = {
@@ -56,6 +61,9 @@
         following: indexById(data?.B?.following || []),
         meta: createMetaLookup(data?.B?.muted || [], data?.B?.blocked || []),
     };
+
+    A.ownerLabel = ownerLabelsByKey.get(OWNER_KEY_PRIMARY) || data?.ownerA || "";
+    B.ownerLabel = ownerLabelsByKey.get(OWNER_KEY_SECONDARY) || data?.ownerB || "";
 
     // ----- set helpers -----
     function toList(map) {
@@ -99,6 +107,18 @@
                 return blockedSet.has(accountID);
             },
         };
+    }
+
+    function createOwnerLabelLookup(uploadSummaries) {
+        const map = new Map();
+        for (const summary of (uploadSummaries || [])) {
+            if (!summary) continue;
+            const ownerKeyValue = typeof summary.ownerKey === "string" ? summary.ownerKey.trim() : "";
+            if (!ownerKeyValue) continue;
+            const ownerLabelValue = typeof summary.ownerLabel === "string" ? summary.ownerLabel.trim() : "";
+            map.set(ownerKeyValue, ownerLabelValue);
+        }
+        return map;
     }
 
     // ----- URL + rendering helpers -----

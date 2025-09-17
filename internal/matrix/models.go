@@ -15,9 +15,23 @@ type AccountSets struct {
 
 // OwnerIdentity describes the owner of a Twitter export archive.
 type OwnerIdentity struct {
-	AccountID   string
-	UserName    string
-	DisplayName string
+	AccountID   string `json:"accountId"`
+	UserName    string `json:"userName"`
+	DisplayName string `json:"displayName"`
+}
+
+const (
+	// UploadSummaryOwnerKeyPrimary identifies the first archive upload in derived views.
+	UploadSummaryOwnerKeyPrimary = "A"
+	// UploadSummaryOwnerKeySecondary identifies the second archive upload in derived views.
+	UploadSummaryOwnerKeySecondary = "B"
+)
+
+// UploadSummary provides client facing metadata for each uploaded archive owner.
+type UploadSummary struct {
+	OwnerKey   string        `json:"ownerKey"`
+	OwnerLabel string        `json:"ownerLabel"`
+	Owner      OwnerIdentity `json:"owner"`
 }
 
 // ComparisonResult holds all derived data required to render a comparison view.

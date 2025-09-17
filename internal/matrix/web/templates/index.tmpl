@@ -30,6 +30,13 @@
         <button type="button" class="section-toggle" data-section-id="overview-content" aria-expanded="true" aria-controls="overview-content">Hide</button>
     </div>
     <div class="section-content" id="overview-content">
+        {{ if .UploadSummaries }}
+        <ul class="upload-summary-list">
+            {{ range .UploadSummaries }}
+                <li class="upload-summary-item">{{ .OwnerLabel }}</li>
+            {{ end }}
+        </ul>
+        {{ end }}
         <div class="grid">
             <div>
                 <h3>{{ .OwnerA }}</h3>

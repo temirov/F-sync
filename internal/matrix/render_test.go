@@ -20,6 +20,10 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 		snippetTableOfContentsAnchor = "<a class=\"toc-link\" href=\"#overview\">Overview</a>"
 		snippetSectionToggleControl  = "<button type=\"button\" class=\"section-toggle\" data-section-id=\"overview-content\" aria-expanded=\"true\" aria-controls=\"overview-content\">Hide</button>"
 		snippetSectionContent        = "<div class=\"section-content\" id=\"overview-content\">"
+		snippetUploadList            = "<ul class=\"upload-summary-list\">"
+		snippetUploadOwnerA          = "<li class=\"upload-summary-item\">Owner A (@owner_a)</li>"
+		snippetUploadOwnerB          = "<li class=\"upload-summary-item\">Owner B (@owner_b)</li>"
+		snippetOwnerLabelJSON        = "\"ownerLabel\":\"Owner A (@owner_a)\""
 	)
 
 	decoratedRecord := matrix.AccountRecord{AccountID: "42", UserName: "presented", DisplayName: "Muted Blocked"}
@@ -57,6 +61,10 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 				snippetTableOfContentsAnchor,
 				snippetSectionToggleControl,
 				snippetSectionContent,
+				snippetUploadList,
+				snippetUploadOwnerA,
+				snippetUploadOwnerB,
+				snippetOwnerLabelJSON,
 			},
 		},
 		{
@@ -81,6 +89,7 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 				snippetTableOfContentsAnchor,
 				snippetSectionToggleControl,
 				snippetSectionContent,
+				snippetUploadList,
 			},
 		},
 	}

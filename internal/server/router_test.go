@@ -135,6 +135,7 @@ func TestRouterIntegrationRendersPage(t *testing.T) {
 		expectedTitleText   = "<title>"
 		expectedSectionText = "Overview"
 		expectedFriendText  = "Friend Account"
+		expectedOwnerLabel  = "Owner A (@owner_a)"
 	)
 
 	comparisonData := &server.ComparisonData{
@@ -172,7 +173,7 @@ func TestRouterIntegrationRendersPage(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
 	}
 	body := recorder.Body.String()
-	for _, expectedSnippet := range []string{expectedTitleText, expectedSectionText, expectedFriendText} {
+	for _, expectedSnippet := range []string{expectedTitleText, expectedSectionText, expectedFriendText, expectedOwnerLabel} {
 		if !strings.Contains(body, expectedSnippet) {
 			t.Fatalf("expected body to contain %q", expectedSnippet)
 		}

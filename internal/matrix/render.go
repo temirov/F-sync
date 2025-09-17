@@ -40,6 +40,8 @@ type comparisonPageViewModel struct {
 	OwnerA string
 	OwnerB string
 
+	UploadSummaries []uploadSummaryViewModel
+
 	Counts struct {
 		A struct{ Followers, Following, Friends, Leaders, Groupies, Muted, Blocked int }
 		B struct{ Followers, Following, Friends, Leaders, Groupies, Muted, Blocked int }
@@ -60,6 +62,10 @@ type ownerListViewModel struct {
 	BlockedAll          []accountCardTemplateData
 	BlockedAndFollowing []accountCardTemplateData
 	BlockedAndFollowers []accountCardTemplateData
+}
+
+type uploadSummaryViewModel struct {
+	OwnerLabel string
 }
 
 type accountCardTemplateData struct {
@@ -148,10 +154,17 @@ func newComparisonPageViewModel(comparison ComparisonResult, cssText string, jsT
 	ownerADecorator := newAccountBadgeDecorator(comparison.AccountSetsA.Muted, comparison.AccountSetsA.Blocked)
 	ownerBDecorator := newAccountBadgeDecorator(comparison.AccountSetsB.Muted, comparison.AccountSetsB.Blocked)
 
+	ownerALabel := ownerPretty(comparison.OwnerA)
+	ownerBLabel := ownerPretty(comparison.OwnerB)
+
 	viewModel := comparisonPageViewModel{
 		Title:  pageTitleText,
-		OwnerA: ownerPretty(comparison.OwnerA),
-		OwnerB: ownerPretty(comparison.OwnerB),
+		OwnerA: ownerALabel,
+		OwnerB: ownerBLabel,
+		UploadSummaries: []uploadSummaryViewModel{
+			{OwnerLabel: ownerALabel},
+			{OwnerLabel: ownerBLabel},
+		},
 		OwnerALists: ownerListViewModel{
 			Friends:             ownerADecorator.Decorate(comparison.OwnerAFriends),
 			Leaders:             ownerADecorator.Decorate(comparison.OwnerALeaders),
@@ -191,8 +204,9 @@ func newComparisonPageViewModel(comparison ComparisonResult, cssText string, jsT
 
 func buildMatrixJSON(comparison ComparisonResult) (string, error) {
 	matrix := struct {
-		OwnerA     string `json:"ownerA"`
-		OwnerB     string `json:"ownerB"`
+		OwnerA     string          `json:"ownerA"`
+		OwnerB     string          `json:"ownerB"`
+		Uploads    []UploadSummary `json:"uploads"`
 		OwnerAData struct {
 			Followers []AccountRecord `json:"followers"`
 			Following []AccountRecord `json:"following"`
@@ -205,9 +219,23 @@ func buildMatrixJSON(comparison ComparisonResult) (string, error) {
 			Muted     []string        `json:"muted"`
 			Blocked   []string        `json:"blocked"`
 		} `json:"B"`
-	}{
-		OwnerA: ownerPretty(comparison.OwnerA),
-		OwnerB: ownerPretty(comparison.OwnerB),
+	}{}
+
+	ownerALabel := ownerPretty(comparison.OwnerA)
+	ownerBLabel := ownerPretty(comparison.OwnerB)
+	matrix.OwnerA = ownerALabel
+	matrix.OwnerB = ownerBLabel
+	matrix.Uploads = []UploadSummary{
+		{
+			OwnerKey:   UploadSummaryOwnerKeyPrimary,
+			OwnerLabel: ownerALabel,
+			Owner:      comparison.OwnerA,
+		},
+		{
+			OwnerKey:   UploadSummaryOwnerKeySecondary,
+			OwnerLabel: ownerBLabel,
+			Owner:      comparison.OwnerB,
+		},
 	}
 	matrix.OwnerAData.Followers = comparison.OwnerAFollowersAll
 	matrix.OwnerAData.Following = comparison.OwnerAFollowingsAll
