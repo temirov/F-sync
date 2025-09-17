@@ -25,86 +25,116 @@
 </nav>
 
 <section id="overview">
-    <h2>Overview</h2>
-    <div class="grid">
-        <div>
-            <h3>{{ .OwnerA }}</h3>
-            <ul>
-                <li>Followers: {{ .Counts.A.Followers }}</li>
-                <li>Followings: {{ .Counts.A.Following }}</li>
-                <li>Friends: {{ .Counts.A.Friends }}</li>
-                <li>Leaders: {{ .Counts.A.Leaders }}</li>
-                <li>Groupies: {{ .Counts.A.Groupies }}</li>
-                <li>Muted: {{ .Counts.A.Muted }}</li>
-                <li>Blocked: {{ .Counts.A.Blocked }}</li>
-            </ul>
-        </div>
-        <div>
-            <h3>{{ .OwnerB }}</h3>
-            <ul>
-                <li>Followers: {{ .Counts.B.Followers }}</li>
-                <li>Followings: {{ .Counts.B.Following }}</li>
-                <li>Friends: {{ .Counts.B.Friends }}</li>
-                <li>Leaders: {{ .Counts.B.Leaders }}</li>
-                <li>Groupies: {{ .Counts.B.Groupies }}</li>
-                <li>Muted: {{ .Counts.B.Muted }}</li>
-                <li>Blocked: {{ .Counts.B.Blocked }}</li>
-            </ul>
+    <div class="section-header">
+        <h2>Overview</h2>
+        <button type="button" class="section-toggle" data-section-id="overview-content" aria-expanded="true" aria-controls="overview-content">Hide</button>
+    </div>
+    <div class="section-content" id="overview-content">
+        <div class="grid">
+            <div>
+                <h3>{{ .OwnerA }}</h3>
+                <ul>
+                    <li>Followers: {{ .Counts.A.Followers }}</li>
+                    <li>Followings: {{ .Counts.A.Following }}</li>
+                    <li>Friends: {{ .Counts.A.Friends }}</li>
+                    <li>Leaders: {{ .Counts.A.Leaders }}</li>
+                    <li>Groupies: {{ .Counts.A.Groupies }}</li>
+                    <li>Muted: {{ .Counts.A.Muted }}</li>
+                    <li>Blocked: {{ .Counts.A.Blocked }}</li>
+                </ul>
+            </div>
+            <div>
+                <h3>{{ .OwnerB }}</h3>
+                <ul>
+                    <li>Followers: {{ .Counts.B.Followers }}</li>
+                    <li>Followings: {{ .Counts.B.Following }}</li>
+                    <li>Friends: {{ .Counts.B.Friends }}</li>
+                    <li>Leaders: {{ .Counts.B.Leaders }}</li>
+                    <li>Groupies: {{ .Counts.B.Groupies }}</li>
+                    <li>Muted: {{ .Counts.B.Muted }}</li>
+                    <li>Blocked: {{ .Counts.B.Blocked }}</li>
+                </ul>
+            </div>
         </div>
     </div>
 </section>
 
 <section id="owner-a-matrix">
-    <h2>{{ .OwnerA }} — Relationship Matrix</h2>
-    <div class="matrix">
-        <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerALists.Friends }}</div>
-        <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerALists.Leaders }}</div>
-        <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerALists.Groupies }}</div>
+    <div class="section-header">
+        <h2>{{ .OwnerA }} — Relationship Matrix</h2>
+        <button type="button" class="section-toggle" data-section-id="owner-a-matrix-content" aria-expanded="true" aria-controls="owner-a-matrix-content">Hide</button>
+    </div>
+    <div class="section-content" id="owner-a-matrix-content">
+        <div class="matrix">
+            <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerALists.Friends }}</div>
+            <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerALists.Leaders }}</div>
+            <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerALists.Groupies }}</div>
+        </div>
     </div>
 </section>
 
 <section id="owner-b-matrix">
-    <h2>{{ .OwnerB }} — Relationship Matrix</h2>
-    <div class="matrix">
-        <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerBLists.Friends }}</div>
-        <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerBLists.Leaders }}</div>
-        <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerBLists.Groupies }}</div>
+    <div class="section-header">
+        <h2>{{ .OwnerB }} — Relationship Matrix</h2>
+        <button type="button" class="section-toggle" data-section-id="owner-b-matrix-content" aria-expanded="true" aria-controls="owner-b-matrix-content">Hide</button>
+    </div>
+    <div class="section-content" id="owner-b-matrix-content">
+        <div class="matrix">
+            <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerBLists.Friends }}</div>
+            <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerBLists.Leaders }}</div>
+            <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerBLists.Groupies }}</div>
+        </div>
     </div>
 </section>
 
 <!-- Removed the static “B follows that A doesn’t” section -->
 
 <section id="comparisons">
-    <h2>On-the-fly comparisons</h2>
-    <div>
-        <label for="cmpOp">Operation:</label>
-        <select id="cmpOp">
-            <option value="B_following_minus_A_following">{{ .OwnerB }} follows that {{ .OwnerA }} doesn’t</option>
-            <option value="A_following_minus_B_following">{{ .OwnerA }} follows that {{ .OwnerB }} doesn’t</option>
-            <option value="mutual_following">Mutual following (Friends of {{ .OwnerA }} & {{ .OwnerB }})</option>
-            <option value="A_followers_minus_following">{{ .OwnerA }}’s followers not followed by {{ .OwnerA }}</option>
-            <option value="B_followers_minus_following">{{ .OwnerB }}’s followers not followed by {{ .OwnerB }}</option>
-            <option value="A_blocked_intersect_following">{{ .OwnerA }}: Blocked ∩ Following</option>
-            <option value="B_blocked_intersect_following">{{ .OwnerB }}: Blocked ∩ Following</option>
-            <option value="symdiff_following">Symmetric diff (Following of {{ .OwnerA }} vs {{ .OwnerB }})</option>
-        </select>
-        <button id="runCmp">Run</button>
+    <div class="section-header">
+        <h2>On-the-fly comparisons</h2>
+        <button type="button" class="section-toggle" data-section-id="comparisons-content" aria-expanded="true" aria-controls="comparisons-content">Hide</button>
     </div>
-    <div id="cmpOut" class="cell" style="margin-top:12px"></div>
+    <div class="section-content" id="comparisons-content">
+        <div>
+            <label for="cmpOp">Operation:</label>
+            <select id="cmpOp">
+                <option value="B_following_minus_A_following">{{ .OwnerB }} follows that {{ .OwnerA }} doesn’t</option>
+                <option value="A_following_minus_B_following">{{ .OwnerA }} follows that {{ .OwnerB }} doesn’t</option>
+                <option value="mutual_following">Mutual following (Friends of {{ .OwnerA }} & {{ .OwnerB }})</option>
+                <option value="A_followers_minus_following">{{ .OwnerA }}’s followers not followed by {{ .OwnerA }}</option>
+                <option value="B_followers_minus_following">{{ .OwnerB }}’s followers not followed by {{ .OwnerB }}</option>
+                <option value="A_blocked_intersect_following">{{ .OwnerA }}: Blocked ∩ Following</option>
+                <option value="B_blocked_intersect_following">{{ .OwnerB }}: Blocked ∩ Following</option>
+                <option value="symdiff_following">Symmetric diff (Following of {{ .OwnerA }} vs {{ .OwnerB }})</option>
+            </select>
+            <button id="runCmp">Run</button>
+        </div>
+        <div id="cmpOut" class="cell" style="margin-top:12px"></div>
+    </div>
 </section>
 
 <section id="owner-a-blocked">
-    <h2>Blocked accounts — {{ .OwnerA }}</h2>
-    <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowing }}
-    <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowers }}
-    <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerALists.BlockedAll }}
+    <div class="section-header">
+        <h2>Blocked accounts — {{ .OwnerA }}</h2>
+        <button type="button" class="section-toggle" data-section-id="owner-a-blocked-content" aria-expanded="true" aria-controls="owner-a-blocked-content">Hide</button>
+    </div>
+    <div class="section-content" id="owner-a-blocked-content">
+        <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowing }}
+        <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowers }}
+        <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerALists.BlockedAll }}
+    </div>
 </section>
 
 <section id="owner-b-blocked">
-    <h2>Blocked accounts — {{ .OwnerB }}</h2>
-    <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowing }}
-    <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowers }}
-    <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerBLists.BlockedAll }}
+    <div class="section-header">
+        <h2>Blocked accounts — {{ .OwnerB }}</h2>
+        <button type="button" class="section-toggle" data-section-id="owner-b-blocked-content" aria-expanded="true" aria-controls="owner-b-blocked-content">Hide</button>
+    </div>
+    <div class="section-content" id="owner-b-blocked-content">
+        <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowing }}
+        <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowers }}
+        <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerBLists.BlockedAll }}
+    </div>
 </section>
 
 <footer><p>Identity & file paths via manifest.js; follow/blocks/mutes via follower.js, following.js, block.js, mute.js.</p></footer>

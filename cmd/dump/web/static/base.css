@@ -68,6 +68,42 @@ section {
     scroll-margin-top: 80px
 }
 
+.section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px
+}
+
+.section-toggle {
+    padding: 6px 12px;
+    border: 1px solid #d0d7de;
+    border-radius: 999px;
+    background: #fff;
+    color: #1c1c1c;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s ease, color 0.2s ease, border-color 0.2s ease
+}
+
+.section-toggle:hover,
+.section-toggle:focus {
+    background: #1c1c1c;
+    color: #fff;
+    border-color: #1c1c1c;
+    outline: none
+}
+
+.section-content.is-hidden {
+    display: none
+}
+
+.is-hidden {
+    display: none !important
+}
+
 .grid {
     display: grid;
     grid-template-columns:1fr 1fr;
