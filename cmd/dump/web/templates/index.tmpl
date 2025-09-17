@@ -12,7 +12,19 @@
     <p>Offline analysis from two archives. No API calls.</p>
 </header>
 
-<section>
+<nav class="toc" aria-label="Page sections">
+    <h2 class="toc-title">Jump to section</h2>
+    <ul class="toc-list">
+        <li class="toc-item"><a class="toc-link" href="#overview">Overview</a></li>
+        <li class="toc-item"><a class="toc-link" href="#owner-a-matrix">{{ .OwnerA }} — Matrix</a></li>
+        <li class="toc-item"><a class="toc-link" href="#owner-b-matrix">{{ .OwnerB }} — Matrix</a></li>
+        <li class="toc-item"><a class="toc-link" href="#comparisons">Comparisons</a></li>
+        <li class="toc-item"><a class="toc-link" href="#owner-a-blocked">{{ .OwnerA }} — Blocked</a></li>
+        <li class="toc-item"><a class="toc-link" href="#owner-b-blocked">{{ .OwnerB }} — Blocked</a></li>
+    </ul>
+</nav>
+
+<section id="overview">
     <h2>Overview</h2>
     <div class="grid">
         <div>
@@ -42,7 +54,7 @@
     </div>
 </section>
 
-<section>
+<section id="owner-a-matrix">
     <h2>{{ .OwnerA }} — Relationship Matrix</h2>
     <div class="matrix">
         <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerALists.Friends }}</div>
@@ -51,7 +63,7 @@
     </div>
 </section>
 
-<section>
+<section id="owner-b-matrix">
     <h2>{{ .OwnerB }} — Relationship Matrix</h2>
     <div class="matrix">
         <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerBLists.Friends }}</div>
@@ -62,7 +74,7 @@
 
 <!-- Removed the static “B follows that A doesn’t” section -->
 
-<section>
+<section id="comparisons">
     <h2>On-the-fly comparisons</h2>
     <div>
         <label for="cmpOp">Operation:</label>
@@ -81,14 +93,14 @@
     <div id="cmpOut" class="cell" style="margin-top:12px"></div>
 </section>
 
-<section>
+<section id="owner-a-blocked">
     <h2>Blocked accounts — {{ .OwnerA }}</h2>
     <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowing }}
     <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowers }}
     <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerALists.BlockedAll }}
 </section>
 
-<section>
+<section id="owner-b-blocked">
     <h2>Blocked accounts — {{ .OwnerB }}</h2>
     <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowing }}
     <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowers }}

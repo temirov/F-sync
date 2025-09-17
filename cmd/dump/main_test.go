@@ -137,13 +137,15 @@ func TestMaybeResolveHandlesEnabled(t *testing.T) {
 
 func TestRenderComparisonPageStructure(t *testing.T) {
 	const (
-		snippetAccountCard      = "class=\"account-card\""
-		snippetAccountDisplay   = "<strong class=\"account-display\">Muted Blocked</strong>"
-		snippetAccountHandle    = "<span class=\"account-handle\">@presented</span>"
-		snippetMutedBadge       = "<span class=\"badge badge-muted\">Muted</span>"
-		snippetBlockedBadge     = "<span class=\"badge badge-block\">Blocked</span>"
-		snippetEmbeddedCSSClass = ".account-card-link:hover .account-display {"
-		snippetEmptyPlaceholder = "<p class=\"muted\">None</p>"
+		snippetAccountCard           = "class=\"account-card\""
+		snippetAccountDisplay        = "<strong class=\"account-display\">Muted Blocked</strong>"
+		snippetAccountHandle         = "<span class=\"account-handle\">@presented</span>"
+		snippetMutedBadge            = "<span class=\"badge badge-muted\">Muted</span>"
+		snippetBlockedBadge          = "<span class=\"badge badge-block\">Blocked</span>"
+		snippetEmbeddedCSSClass      = ".account-card-link:hover .account-display {"
+		snippetEmptyPlaceholder      = "<p class=\"muted\">None</p>"
+		snippetTableOfContentsNav    = "<nav class=\"toc\" aria-label=\"Page sections\">"
+		snippetTableOfContentsAnchor = "<a class=\"toc-link\" href=\"#overview\">Overview</a>"
 	)
 
 	decoratedRecord := dumpcmd.AccountRecord{AccountID: "42", UserName: "presented", DisplayName: "Muted Blocked"}
@@ -177,6 +179,8 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 				snippetMutedBadge,
 				snippetBlockedBadge,
 				snippetEmbeddedCSSClass,
+				snippetTableOfContentsNav,
+				snippetTableOfContentsAnchor,
 			},
 		},
 		{
@@ -197,6 +201,8 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 			},
 			expectedSnippets: []string{
 				snippetEmptyPlaceholder,
+				snippetTableOfContentsNav,
+				snippetTableOfContentsAnchor,
 			},
 		},
 	}
