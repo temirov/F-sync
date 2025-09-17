@@ -1,5 +1,5 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
     <meta charset="utf-8">
     <title>{{ .Title }}</title>
@@ -7,148 +7,272 @@
     <style>{{ .CSS }}</style>
 </head>
 <body>
-<header>
-    <h1>Twitter Relationship Matrix</h1>
-    <p>Offline analysis from two archives. No API calls.</p>
-</header>
-
-<nav class="toc" aria-label="Page sections">
-    <h2 class="toc-title">Jump to section</h2>
-    <ul class="toc-list">
-        <li class="toc-item"><a class="toc-link" href="#overview">Overview</a></li>
-        <li class="toc-item"><a class="toc-link" href="#owner-a-matrix">{{ .OwnerA }} — Matrix</a></li>
-        <li class="toc-item"><a class="toc-link" href="#owner-b-matrix">{{ .OwnerB }} — Matrix</a></li>
-        <li class="toc-item"><a class="toc-link" href="#comparisons">Comparisons</a></li>
-        <li class="toc-item"><a class="toc-link" href="#owner-a-blocked">{{ .OwnerA }} — Blocked</a></li>
-        <li class="toc-item"><a class="toc-link" href="#owner-b-blocked">{{ .OwnerB }} — Blocked</a></li>
-    </ul>
+<nav class="navbar navbar-expand-lg navbar-dark bg-primary shadow-sm">
+    <div class="container">
+        <span class="navbar-brand fw-semibold">Twitter Relationship Matrix</span>
+    </div>
 </nav>
 
-<section id="overview">
-    <div class="section-header">
-        <h2>Overview</h2>
-        <button type="button" class="section-toggle" data-section-id="overview-content" aria-expanded="true" aria-controls="overview-content">Hide</button>
-    </div>
-    <div class="section-content" id="overview-content">
-        <div class="grid">
-            <div>
-                <h3>{{ .OwnerA }}</h3>
-                <ul>
-                    <li>Followers: {{ .Counts.A.Followers }}</li>
-                    <li>Followings: {{ .Counts.A.Following }}</li>
-                    <li>Friends: {{ .Counts.A.Friends }}</li>
-                    <li>Leaders: {{ .Counts.A.Leaders }}</li>
-                    <li>Groupies: {{ .Counts.A.Groupies }}</li>
-                    <li>Muted: {{ .Counts.A.Muted }}</li>
-                    <li>Blocked: {{ .Counts.A.Blocked }}</li>
-                </ul>
-            </div>
-            <div>
-                <h3>{{ .OwnerB }}</h3>
-                <ul>
-                    <li>Followers: {{ .Counts.B.Followers }}</li>
-                    <li>Followings: {{ .Counts.B.Following }}</li>
-                    <li>Friends: {{ .Counts.B.Friends }}</li>
-                    <li>Leaders: {{ .Counts.B.Leaders }}</li>
-                    <li>Groupies: {{ .Counts.B.Groupies }}</li>
-                    <li>Muted: {{ .Counts.B.Muted }}</li>
-                    <li>Blocked: {{ .Counts.B.Blocked }}</li>
-                </ul>
-            </div>
+<main class="container my-4">
+    <div class="row g-4 align-items-stretch">
+        <div class="col-lg-4">
+            <section class="card shadow-sm h-100">
+                <div class="card-header bg-primary bg-opacity-10">
+                    <h1 class="h5 mb-0 text-primary">Upload Twitter archives</h1>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted">Drag and drop up to two ZIP files or browse to upload. Archives remain on this device.</p>
+                    <div id="uploadAlerts">
+                        {{ range .Errors }}
+                            <div class="alert alert-danger" role="alert">{{ . }}</div>
+                        {{ end }}
+                    </div>
+                    <div id="archiveDropzone" class="upload-dropzone border border-primary border-2 border-dashed rounded-4 text-center py-4 px-3 mb-3" tabindex="0" role="button" aria-label="Twitter archive upload dropzone">
+                        <p class="lead mb-3">Drop archives here</p>
+                        <p class="text-muted small mb-4">Accepted format: Twitter ZIP export</p>
+                        <button type="button" class="btn btn-primary" id="browseArchivesButton">Browse files</button>
+                        <input type="file" id="archiveInput" class="d-none" multiple accept=".zip">
+                    </div>
+                    <h2 class="h6 text-uppercase text-muted">Uploaded archives</h2>
+                    <ul class="list-group" id="uploadsList">
+                        {{ if .Uploads }}
+                            {{ range .Uploads }}
+                                <li class="list-group-item">
+                                    <div class="d-flex flex-column">
+                                        <span class="badge bg-info text-dark align-self-start mb-2">{{ .SlotLabel }}</span>
+                                        <span class="fw-semibold">{{ .Owner }}</span>
+                                        <span class="text-muted small">{{ .FileName }}</span>
+                                    </div>
+                                </li>
+                            {{ end }}
+                        {{ else }}
+                            <li class="list-group-item text-muted" id="uploadsPlaceholder">No archives uploaded yet.</li>
+                        {{ end }}
+                    </ul>
+                    <div class="d-flex gap-2 mt-3">
+                        <button type="button" class="btn btn-success flex-grow-1" id="compareButton" disabled>Compare</button>
+                        <button type="button" class="btn btn-outline-secondary" id="resetUploadsButton">Reset</button>
+                    </div>
+                </div>
+            </section>
+        </div>
+        <div class="col-lg-8">
+            <section class="card shadow-sm h-100">
+                <div class="card-header bg-primary bg-opacity-10 d-flex align-items-center justify-content-between">
+                    <h2 class="h5 mb-0 text-primary">Comparison</h2>
+                    {{ if .HasComparison }}
+                        <span class="badge bg-success-subtle text-success">Ready</span>
+                    {{ else }}
+                        <span class="badge bg-secondary text-light">Awaiting uploads</span>
+                    {{ end }}
+                </div>
+                <div class="card-body" id="comparisonPanel" data-has-comparison="{{ if .HasComparison }}true{{ else }}false{{ end }}">
+                    {{ if .HasComparison }}
+                        <nav class="nav nav-pills flex-wrap gap-2 mb-4" aria-label="Comparison sections">
+                            <a class="btn btn-outline-primary" href="#overview">Overview</a>
+                            <a class="btn btn-outline-primary" href="#owner-a-matrix">{{ .OwnerA }} — Matrix</a>
+                            <a class="btn btn-outline-primary" href="#owner-b-matrix">{{ .OwnerB }} — Matrix</a>
+                            <a class="btn btn-outline-primary" href="#comparisons">Comparisons</a>
+                            <a class="btn btn-outline-primary" href="#owner-a-blocked">{{ .OwnerA }} — Blocked</a>
+                            <a class="btn btn-outline-primary" href="#owner-b-blocked">{{ .OwnerB }} — Blocked</a>
+                        </nav>
+
+                        <section id="overview" class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h3 class="h5 mb-0">Overview</h3>
+                                <button type="button" class="btn btn-sm btn-outline-primary section-toggle" data-section-id="overview-content" aria-expanded="true" aria-controls="overview-content">Hide</button>
+                            </div>
+                            <div id="overview-content" class="section-content">
+                                <div class="row row-cols-1 row-cols-md-2 g-3">
+                                    <div class="col">
+                                        <div class="card border-0 bg-light">
+                                            <div class="card-body">
+                                                <h4 class="h6 text-uppercase text-muted">{{ .OwnerA }}</h4>
+                                                <ul class="list-unstyled mb-0">
+                                                    <li><strong>Followers:</strong> {{ .Counts.A.Followers }}</li>
+                                                    <li><strong>Followings:</strong> {{ .Counts.A.Following }}</li>
+                                                    <li><strong>Friends:</strong> {{ .Counts.A.Friends }}</li>
+                                                    <li><strong>Leaders:</strong> {{ .Counts.A.Leaders }}</li>
+                                                    <li><strong>Groupies:</strong> {{ .Counts.A.Groupies }}</li>
+                                                    <li><strong>Muted:</strong> {{ .Counts.A.Muted }}</li>
+                                                    <li><strong>Blocked:</strong> {{ .Counts.A.Blocked }}</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="card border-0 bg-light">
+                                            <div class="card-body">
+                                                <h4 class="h6 text-uppercase text-muted">{{ .OwnerB }}</h4>
+                                                <ul class="list-unstyled mb-0">
+                                                    <li><strong>Followers:</strong> {{ .Counts.B.Followers }}</li>
+                                                    <li><strong>Followings:</strong> {{ .Counts.B.Following }}</li>
+                                                    <li><strong>Friends:</strong> {{ .Counts.B.Friends }}</li>
+                                                    <li><strong>Leaders:</strong> {{ .Counts.B.Leaders }}</li>
+                                                    <li><strong>Groupies:</strong> {{ .Counts.B.Groupies }}</li>
+                                                    <li><strong>Muted:</strong> {{ .Counts.B.Muted }}</li>
+                                                    <li><strong>Blocked:</strong> {{ .Counts.B.Blocked }}</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="owner-a-matrix" class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h3 class="h5 mb-0">{{ .OwnerA }} — Relationship Matrix</h3>
+                                <button type="button" class="btn btn-sm btn-outline-primary section-toggle" data-section-id="owner-a-matrix-content" aria-expanded="true" aria-controls="owner-a-matrix-content">Hide</button>
+                            </div>
+                            <div id="owner-a-matrix-content" class="section-content">
+                                <div class="row row-cols-1 row-cols-md-3 g-3">
+                                    <div class="col">
+                                        <div class="card border-0 bg-light h-100">
+                                            <div class="card-body">
+                                                <h4 class="h6">Friends</h4>
+                                                {{ template "accountList" .OwnerALists.Friends }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="card border-0 bg-light h-100">
+                                            <div class="card-body">
+                                                <h4 class="h6">Leaders</h4>
+                                                {{ template "accountList" .OwnerALists.Leaders }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="card border-0 bg-light h-100">
+                                            <div class="card-body">
+                                                <h4 class="h6">Groupies</h4>
+                                                {{ template "accountList" .OwnerALists.Groupies }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="owner-b-matrix" class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h3 class="h5 mb-0">{{ .OwnerB }} — Relationship Matrix</h3>
+                                <button type="button" class="btn btn-sm btn-outline-primary section-toggle" data-section-id="owner-b-matrix-content" aria-expanded="true" aria-controls="owner-b-matrix-content">Hide</button>
+                            </div>
+                            <div id="owner-b-matrix-content" class="section-content">
+                                <div class="row row-cols-1 row-cols-md-3 g-3">
+                                    <div class="col">
+                                        <div class="card border-0 bg-light h-100">
+                                            <div class="card-body">
+                                                <h4 class="h6">Friends</h4>
+                                                {{ template "accountList" .OwnerBLists.Friends }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="card border-0 bg-light h-100">
+                                            <div class="card-body">
+                                                <h4 class="h6">Leaders</h4>
+                                                {{ template "accountList" .OwnerBLists.Leaders }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div class="col">
+                                        <div class="card border-0 bg-light h-100">
+                                            <div class="card-body">
+                                                <h4 class="h6">Groupies</h4>
+                                                {{ template "accountList" .OwnerBLists.Groupies }}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section id="comparisons" class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h3 class="h5 mb-0">On-the-fly comparisons</h3>
+                                <button type="button" class="btn btn-sm btn-outline-primary section-toggle" data-section-id="comparisons-content" aria-expanded="true" aria-controls="comparisons-content">Hide</button>
+                            </div>
+                            <div id="comparisons-content" class="section-content">
+                                <div class="row g-3 align-items-end">
+                                        <div class="col-lg-8">
+                                                <label for="cmpOp" class="form-label">Operation</label>
+                                                <select id="cmpOp" class="form-select">
+                                                        <option value="B_following_minus_A_following">{{ .OwnerB }} follows that {{ .OwnerA }} doesn’t</option>
+                                                        <option value="A_following_minus_B_following">{{ .OwnerA }} follows that {{ .OwnerB }} doesn’t</option>
+                                                        <option value="mutual_following">Mutual following (Friends of {{ .OwnerA }} & {{ .OwnerB }})</option>
+                                                        <option value="A_followers_minus_following">{{ .OwnerA }}’s followers not followed by {{ .OwnerA }}</option>
+                                                        <option value="B_followers_minus_following">{{ .OwnerB }}’s followers not followed by {{ .OwnerB }}</option>
+                                                        <option value="A_blocked_intersect_following">{{ .OwnerA }}: Blocked ∩ Following</option>
+                                                        <option value="B_blocked_intersect_following">{{ .OwnerB }}: Blocked ∩ Following</option>
+                                                        <option value="symdiff_following">Symmetric diff (Following of {{ .OwnerA }} vs {{ .OwnerB }})</option>
+                                                </select>
+                                        </div>
+                                        <div class="col-lg-4 d-grid">
+                                                <button id="runCmp" class="btn btn-primary">Run comparison</button>
+                                        </div>
+                                </div>
+                                <div id="cmpOut" class="card border-0 bg-light mt-3 p-3"></div>
+                            </div>
+                        </section>
+
+                        <section id="owner-a-blocked" class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h3 class="h5 mb-0">Blocked accounts — {{ .OwnerA }}</h3>
+                                <button type="button" class="btn btn-sm btn-outline-primary section-toggle" data-section-id="owner-a-blocked-content" aria-expanded="true" aria-controls="owner-a-blocked-content">Hide</button>
+                            </div>
+                            <div id="owner-a-blocked-content" class="section-content">
+                                <h4 class="h6 text-muted">Also in Following</h4>
+                                {{ template "accountList" .OwnerALists.BlockedAndFollowing }}
+                                <h4 class="h6 text-muted mt-3">Also in Followers</h4>
+                                {{ template "accountList" .OwnerALists.BlockedAndFollowers }}
+                                <h4 class="h6 text-muted mt-3">All Blocked</h4>
+                                {{ template "accountList" .OwnerALists.BlockedAll }}
+                            </div>
+                        </section>
+
+                        <section id="owner-b-blocked" class="mb-4">
+                            <div class="d-flex justify-content-between align-items-center mb-3">
+                                <h3 class="h5 mb-0">Blocked accounts — {{ .OwnerB }}</h3>
+                                <button type="button" class="btn btn-sm btn-outline-primary section-toggle" data-section-id="owner-b-blocked-content" aria-expanded="true" aria-controls="owner-b-blocked-content">Hide</button>
+                            </div>
+                            <div id="owner-b-blocked-content" class="section-content">
+                                <h4 class="h6 text-muted">Also in Following</h4>
+                                {{ template "accountList" .OwnerBLists.BlockedAndFollowing }}
+                                <h4 class="h6 text-muted mt-3">Also in Followers</h4>
+                                {{ template "accountList" .OwnerBLists.BlockedAndFollowers }}
+                                <h4 class="h6 text-muted mt-3">All Blocked</h4>
+                                {{ template "accountList" .OwnerBLists.BlockedAll }}
+                            </div>
+                        </section>
+                    {{ else }}
+                        <div class="alert alert-info" role="status">
+                            Upload two archives and press <strong>Compare</strong> to generate the relationship matrix.
+                        </div>
+                    {{ end }}
+                </div>
+            </section>
         </div>
     </div>
-</section>
+</main>
 
-<section id="owner-a-matrix">
-    <div class="section-header">
-        <h2>{{ .OwnerA }} — Relationship Matrix</h2>
-        <button type="button" class="section-toggle" data-section-id="owner-a-matrix-content" aria-expanded="true" aria-controls="owner-a-matrix-content">Hide</button>
+<footer class="bg-dark text-light py-3 mt-auto">
+    <div class="container small text-center">
+        Data sourced from local Twitter archives; no information leaves your browser.
     </div>
-    <div class="section-content" id="owner-a-matrix-content">
-        <div class="matrix">
-            <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerALists.Friends }}</div>
-            <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerALists.Leaders }}</div>
-            <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerALists.Groupies }}</div>
-        </div>
-    </div>
-</section>
+</footer>
 
-<section id="owner-b-matrix">
-    <div class="section-header">
-        <h2>{{ .OwnerB }} — Relationship Matrix</h2>
-        <button type="button" class="section-toggle" data-section-id="owner-b-matrix-content" aria-expanded="true" aria-controls="owner-b-matrix-content">Hide</button>
-    </div>
-    <div class="section-content" id="owner-b-matrix-content">
-        <div class="matrix">
-            <div class="cell"><h3>Friends</h3>{{ template "accountList" .OwnerBLists.Friends }}</div>
-            <div class="cell"><h3>Leaders</h3>{{ template "accountList" .OwnerBLists.Leaders }}</div>
-            <div class="cell"><h3>Groupies</h3>{{ template "accountList" .OwnerBLists.Groupies }}</div>
-        </div>
-    </div>
-</section>
-
-<!-- Removed the static “B follows that A doesn’t” section -->
-
-<section id="comparisons">
-    <div class="section-header">
-        <h2>On-the-fly comparisons</h2>
-        <button type="button" class="section-toggle" data-section-id="comparisons-content" aria-expanded="true" aria-controls="comparisons-content">Hide</button>
-    </div>
-    <div class="section-content" id="comparisons-content">
-        <div>
-            <label for="cmpOp">Operation:</label>
-            <select id="cmpOp">
-                <option value="B_following_minus_A_following">{{ .OwnerB }} follows that {{ .OwnerA }} doesn’t</option>
-                <option value="A_following_minus_B_following">{{ .OwnerA }} follows that {{ .OwnerB }} doesn’t</option>
-                <option value="mutual_following">Mutual following (Friends of {{ .OwnerA }} & {{ .OwnerB }})</option>
-                <option value="A_followers_minus_following">{{ .OwnerA }}’s followers not followed by {{ .OwnerA }}</option>
-                <option value="B_followers_minus_following">{{ .OwnerB }}’s followers not followed by {{ .OwnerB }}</option>
-                <option value="A_blocked_intersect_following">{{ .OwnerA }}: Blocked ∩ Following</option>
-                <option value="B_blocked_intersect_following">{{ .OwnerB }}: Blocked ∩ Following</option>
-                <option value="symdiff_following">Symmetric diff (Following of {{ .OwnerA }} vs {{ .OwnerB }})</option>
-            </select>
-            <button id="runCmp">Run</button>
-        </div>
-        <div id="cmpOut" class="cell" style="margin-top:12px"></div>
-    </div>
-</section>
-
-<section id="owner-a-blocked">
-    <div class="section-header">
-        <h2>Blocked accounts — {{ .OwnerA }}</h2>
-        <button type="button" class="section-toggle" data-section-id="owner-a-blocked-content" aria-expanded="true" aria-controls="owner-a-blocked-content">Hide</button>
-    </div>
-    <div class="section-content" id="owner-a-blocked-content">
-        <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowing }}
-        <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerALists.BlockedAndFollowers }}
-        <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerALists.BlockedAll }}
-    </div>
-</section>
-
-<section id="owner-b-blocked">
-    <div class="section-header">
-        <h2>Blocked accounts — {{ .OwnerB }}</h2>
-        <button type="button" class="section-toggle" data-section-id="owner-b-blocked-content" aria-expanded="true" aria-controls="owner-b-blocked-content">Hide</button>
-    </div>
-    <div class="section-content" id="owner-b-blocked-content">
-        <h3 class="sub">Also in Following</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowing }}
-        <h3 class="sub">Also in Followers</h3>{{ template "accountList" .OwnerBLists.BlockedAndFollowers }}
-        <h3 class="sub">All Blocked</h3>{{ template "accountList" .OwnerBLists.BlockedAll }}
-    </div>
-</section>
-
-<footer><p>Identity & file paths via manifest.js; follow/blocks/mutes via follower.js, following.js, block.js, mute.js.</p></footer>
-
-<!-- Data blob for JS (keeps JS code generic) -->
 <script id="matrixData" type="application/json">{{ .MatrixJSON }}</script>
 <script>{{ .JS }}</script>
 
 {{ define "accountList" }}
     {{ $entries := . }}
     {{ if not $entries }}
-        <p class="muted">None</p>
+        <p class="text-muted fst-italic">None</p>
     {{ else }}
-        <ul class="account-list">
+        <ul class="list-unstyled mb-0">
             {{ range $entries }}
                 {{ template "accountCard" . }}
             {{ end }}
@@ -158,21 +282,21 @@
 
 {{ define "accountCard" }}
     {{ $entry := . }}
-    <li class="account-card">
-        <div class="account-card-main">
-            <a class="account-card-link" target="_blank" rel="noopener" href="{{ $entry.Presentation.ProfileURL }}">
-                <strong class="account-display">{{ $entry.Presentation.Display }}</strong>
+    <li class="mb-3 pb-3 border-bottom">
+        <div class="d-flex flex-column">
+            <a class="text-decoration-none" target="_blank" rel="noopener" href="{{ $entry.Presentation.ProfileURL }}">
+                <strong class="d-block">{{ $entry.Presentation.Display }}</strong>
             </a>
             {{ with $handle := $entry.Presentation.Handle }}
-                <span class="account-handle">{{ $handle }}</span>
+                <span class="text-muted small">{{ $handle }}</span>
+            {{ end }}
+            {{ if or $entry.Muted $entry.Blocked }}
+                <div class="mt-2">
+                    {{ if $entry.Muted }}<span class="badge text-bg-warning me-2">Muted</span>{{ end }}
+                    {{ if $entry.Blocked }}<span class="badge text-bg-danger">Blocked</span>{{ end }}
+                </div>
             {{ end }}
         </div>
-        {{ if or $entry.Muted $entry.Blocked }}
-        <div class="account-meta">
-            {{ if $entry.Muted }}<span class="badge badge-muted">Muted</span>{{ end }}
-            {{ if $entry.Blocked }}<span class="badge badge-block">Blocked</span>{{ end }}
-        </div>
-        {{ end }}
     </li>
 {{ end }}
 

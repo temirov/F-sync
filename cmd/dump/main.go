@@ -68,7 +68,7 @@ func main() {
 
 	comparison := matrix.BuildComparison(accountSetsA, accountSetsB, ownerA, ownerB)
 
-	pageHTML, err := matrix.RenderComparisonPage(comparison)
+	pageHTML, err := matrix.RenderComparisonPage(matrix.ComparisonPageData{Comparison: &comparison})
 	if err != nil {
 		dief(renderErrorFormat, err)
 	}

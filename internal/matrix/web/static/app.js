@@ -1,280 +1,487 @@
 (function () {
     "use strict";
-    const blobEl = document.getElementById("matrixData");
-    if (!blobEl) return;
-    const data = JSON.parse(blobEl.textContent || "{}");
 
-    const HANDLE_PREFIX = "@";
-    const TEXT_UNKNOWN = "Unknown";
-    const TEXT_FOLLOW = "Follow";
-    const TEXT_MUTED = "Muted";
-    const TEXT_BLOCKED = "Blocked";
-    const TEXT_NONE = "None";
-    const CLASS_ACCOUNT_LIST = "account-list";
-    const CLASS_ACCOUNT_CARD = "account-card";
-    const CLASS_ACCOUNT_CARD_MAIN = "account-card-main";
-    const CLASS_ACCOUNT_CARD_LINK = "account-card-link";
-    const CLASS_ACCOUNT_DISPLAY = "account-display";
-    const CLASS_ACCOUNT_HANDLE = "account-handle";
-    const CLASS_ACCOUNT_META = "account-meta";
-    const CLASS_BADGE_MUTED = "badge badge-muted";
-    const CLASS_BADGE_BLOCKED = "badge badge-block";
-    const CLASS_BUTTON = "btn";
-    const CLASS_MUTED_TEXT = "muted";
+    const ID_MATRIX_DATA = "matrixData";
+    const ID_ARCHIVE_INPUT = "archiveInput";
+    const ID_ARCHIVE_DROPZONE = "archiveDropzone";
+    const ID_BROWSE_BUTTON = "browseArchivesButton";
+    const ID_UPLOADS_LIST = "uploadsList";
+    const ID_UPLOADS_PLACEHOLDER = "uploadsPlaceholder";
+    const ID_UPLOAD_ALERTS = "uploadAlerts";
+    const ID_COMPARE_BUTTON = "compareButton";
+    const ID_RESET_BUTTON = "resetUploadsButton";
+    const ID_COMPARISON_PANEL = "comparisonPanel";
+    const ID_COMPARISON_OPERATION = "cmpOp";
+    const ID_COMPARISON_OUTPUT = "cmpOut";
+    const ID_COMPARISON_BUTTON = "runCmp";
+
+    const ROUTE_UPLOADS = "/api/uploads";
+    const HTTP_METHOD_POST = "POST";
+    const HTTP_METHOD_DELETE = "DELETE";
+    const JSON_KEY_UPLOADS = "uploads";
+    const JSON_KEY_ERROR = "error";
+    const JSON_KEY_COMPARISON_READY = "comparisonReady";
+
+    const CLASS_DROPZONE_ACTIVE = "is-dragover";
     const CLASS_SECTION_TOGGLE = "section-toggle";
     const CLASS_SECTION_CONTENT = "section-content";
     const CLASS_HIDDEN = "is-hidden";
+
+    const ATTRIBUTE_SECTION_TARGET = "data-section-id";
+    const ATTRIBUTE_ARIA_CONTROLS = "aria-controls";
+    const ATTRIBUTE_ARIA_EXPANDED = "aria-expanded";
+
+    const VALUE_TRUE = "true";
+    const VALUE_FALSE = "false";
+
+    const TEXT_UPLOAD_GENERIC_ERROR = "Upload failed. Please verify the file format.";
+    const TEXT_RESET_GENERIC_ERROR = "Reset failed. Please try again.";
+    const TEXT_UPLOAD_PLACEHOLDER = "No archives uploaded yet.";
+    const TEXT_UNKNOWN = "Unknown";
+    const TEXT_HANDLE_PREFIX = "@";
+    const TEXT_FOLLOW_BUTTON = "Follow";
+    const TEXT_MUTED = "Muted";
+    const TEXT_BLOCKED = "Blocked";
+    const TEXT_NONE = "None";
+    const TEXT_HIDE = "Hide";
+    const TEXT_SHOW = "Show";
+
     const PROFILE_BASE_URL = "https://twitter.com/";
     const PROFILE_ID_BASE_URL = "https://twitter.com/i/user/";
     const FOLLOW_SCREEN_NAME_URL = "https://twitter.com/intent/follow?screen_name=";
     const FOLLOW_ACCOUNT_ID_URL = "https://twitter.com/intent/user?user_id=";
-    const NONE_PLACEHOLDER_HTML = "<p class='" + CLASS_MUTED_TEXT + "'>" + TEXT_NONE + "</p>";
-    const ATTRIBUTE_SECTION_TARGET = "data-section-id";
-    const ATTRIBUTE_ARIA_CONTROLS = "aria-controls";
-    const ATTRIBUTE_ARIA_EXPANDED = "aria-expanded";
-    const VALUE_STATE_TRUE = "true";
-    const VALUE_STATE_FALSE = "false";
-    const TEXT_HIDE = "Hide";
-    const TEXT_SHOW = "Show";
 
-    function indexById(arr) {
-        const map = new Map();
-        for (const rec of (arr || [])) {
-            if (rec && rec.AccountID) map.set(rec.AccountID, rec);
-        }
-        return map;
-    }
+    initializeUploadUI();
+    initializeMatrixFeatures();
 
-    // Indexed records for both owners
-    const A = {
-        followers: indexById(data?.A?.followers || []),
-        following: indexById(data?.A?.following || []),
-        meta: createMetaLookup(data?.A?.muted || [], data?.A?.blocked || []),
-    };
-    const B = {
-        followers: indexById(data?.B?.followers || []),
-        following: indexById(data?.B?.following || []),
-        meta: createMetaLookup(data?.B?.muted || [], data?.B?.blocked || []),
-    };
+    function initializeUploadUI() {
+        const fileInputElement = document.getElementById(ID_ARCHIVE_INPUT);
+        const dropzoneElement = document.getElementById(ID_ARCHIVE_DROPZONE);
+        const browseButtonElement = document.getElementById(ID_BROWSE_BUTTON);
+        const compareButtonElement = document.getElementById(ID_COMPARE_BUTTON);
+        const comparisonPanelElement = document.getElementById(ID_COMPARISON_PANEL);
+        const uploadsListElement = document.getElementById(ID_UPLOADS_LIST);
+        const placeholderElement = document.getElementById(ID_UPLOADS_PLACEHOLDER);
+        const alertContainerElement = document.getElementById(ID_UPLOAD_ALERTS);
+        const resetButtonElement = document.getElementById(ID_RESET_BUTTON);
 
-    // ----- set helpers -----
-    function toList(map) {
-        return Array.from(map.values()).sort((a, b) => {
-            const ka = (a.DisplayName || a.UserName || a.AccountID || "").toLowerCase();
-            const kb = (b.DisplayName || b.UserName || b.AccountID || "").toLowerCase();
-            return ka < kb ? -1 : ka > kb ? 1 : 0;
-        });
-    }
-    function difference(a, b) {
-        const out = new Map();
-        for (const [id, rec] of a) if (!b.has(id)) out.set(id, rec);
-        return out;
-    }
-    function intersection(a, b) {
-        const out = new Map();
-        for (const [id, rec] of a) if (b.has(id)) out.set(id, rec);
-        return out;
-    }
-    function symmetricDiff(a, b) {
-        const out = new Map();
-        for (const [id, rec] of a) if (!b.has(id)) out.set(id, rec);
-        for (const [id, rec] of b) if (!a.has(id)) out.set(id, rec);
-        return out;
-    }
-    function intersectWithIDSet(recMap, ids) {
-        const set = new Set(ids || []);
-        const out = new Map();
-        for (const [id, rec] of recMap) if (set.has(id)) out.set(id, rec);
-        return out;
-    }
-
-    function createMetaLookup(mutedIDs, blockedIDs) {
-        const mutedSet = new Set(mutedIDs || []);
-        const blockedSet = new Set(blockedIDs || []);
-        return {
-            isMuted(accountID) {
-                return mutedSet.has(accountID);
-            },
-            isBlocked(accountID) {
-                return blockedSet.has(accountID);
-            },
-        };
-    }
-
-    // ----- URL + rendering helpers -----
-    function toProfileURL(record) {
-        return record.UserName
-            ? PROFILE_BASE_URL + record.UserName
-            : PROFILE_ID_BASE_URL + record.AccountID;
-    }
-    function toFollowIntentURL(record) {
-        return record.UserName
-            ? FOLLOW_SCREEN_NAME_URL + encodeURIComponent(record.UserName)
-            : FOLLOW_ACCOUNT_ID_URL + encodeURIComponent(record.AccountID);
-    }
-    function escapeHTML(s) {
-        return (s || "").replace(/[&<>\"']/g, m => ({
-            "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;"
-        }[m]));
-    }
-    function displayText(record) {
-        const display = (record.DisplayName || "").trim();
-        if (display) return display;
-        const handle = (record.UserName || "").trim();
-        if (handle) return HANDLE_PREFIX + handle;
-        if (record.AccountID) return record.AccountID;
-        return TEXT_UNKNOWN;
-    }
-    function handleText(record) {
-        const handle = (record.UserName || "").trim();
-        return handle ? HANDLE_PREFIX + handle : "";
-    }
-    function computeFlags(accountID, lookups) {
-        const sources = lookups || [];
-        return {
-            muted: sources.some(lookup => lookup && lookup.isMuted(accountID)),
-            blocked: sources.some(lookup => lookup && lookup.isBlocked(accountID)),
-        };
-    }
-
-    // Render list; when `withFollow` is true, add a Follow intent button
-    function renderList(records, withFollow, metaLookups) {
-        const host = document.getElementById("cmpOut");
-        if (!host) return;
-        if (!(records && records.length)) {
-            host.innerHTML = NONE_PLACEHOLDER_HTML;
+        if (!fileInputElement || !dropzoneElement || !browseButtonElement || !compareButtonElement || !comparisonPanelElement || !uploadsListElement || !alertContainerElement) {
             return;
         }
-        const items = records.map(record => {
-            const profileURL = escapeHTML(toProfileURL(record));
-            const displayHTML = `<strong class="${CLASS_ACCOUNT_DISPLAY}">${escapeHTML(displayText(record))}</strong>`;
-            const linkHTML = `<a class="${CLASS_ACCOUNT_CARD_LINK}" target="_blank" rel="noopener" href="${profileURL}">${displayHTML}</a>`;
-            const handleValue = handleText(record);
-            const handleHTML = handleValue ? `<span class="${CLASS_ACCOUNT_HANDLE}">${escapeHTML(handleValue)}</span>` : "";
-            const flags = computeFlags(record.AccountID, metaLookups);
-            const metaPieces = [];
-            if (flags.muted) {
-                metaPieces.push(`<span class="${CLASS_BADGE_MUTED}">${TEXT_MUTED}</span>`);
+
+        const hasComparison = comparisonPanelElement.dataset.hasComparison === VALUE_TRUE;
+        updateCompareButton(compareButtonElement, hasComparison);
+
+        browseButtonElement.addEventListener("click", () => fileInputElement.click());
+
+        fileInputElement.addEventListener("change", () => {
+            const { files } = fileInputElement;
+            if (files && files.length > 0) {
+                uploadArchives(files, {
+                    compareButtonElement,
+                    uploadsListElement,
+                    placeholderElement,
+                    alertContainerElement,
+                });
+                fileInputElement.value = "";
             }
-            if (flags.blocked) {
-                metaPieces.push(`<span class="${CLASS_BADGE_BLOCKED}">${TEXT_BLOCKED}</span>`);
+        });
+
+        dropzoneElement.addEventListener("dragover", event => {
+            event.preventDefault();
+            dropzoneElement.classList.add(CLASS_DROPZONE_ACTIVE);
+        });
+
+        dropzoneElement.addEventListener("dragleave", () => {
+            dropzoneElement.classList.remove(CLASS_DROPZONE_ACTIVE);
+        });
+
+        dropzoneElement.addEventListener("drop", event => {
+            event.preventDefault();
+            dropzoneElement.classList.remove(CLASS_DROPZONE_ACTIVE);
+            const items = event.dataTransfer?.files;
+            if (items && items.length > 0) {
+                uploadArchives(items, {
+                    compareButtonElement,
+                    uploadsListElement,
+                    placeholderElement,
+                    alertContainerElement,
+                });
             }
-            if (withFollow) {
-                const followURL = escapeHTML(toFollowIntentURL(record));
-                metaPieces.push(`<a class="${CLASS_BUTTON}" target="_blank" rel="noopener" href="${followURL}">${TEXT_FOLLOW}</a>`);
-            }
-            const metaHTML = metaPieces.length ? `<div class="${CLASS_ACCOUNT_META}">${metaPieces.join("")}</div>` : "";
-            return `<li class="${CLASS_ACCOUNT_CARD}"><div class="${CLASS_ACCOUNT_CARD_MAIN}">${linkHTML}${handleHTML}</div>${metaHTML}</li>`;
-        }).join("");
-        host.innerHTML = `<ul class="${CLASS_ACCOUNT_LIST}">${items}</ul>`;
-    }
+        });
 
-    // Decide which operations should show actionable Follow buttons
-    function isFollowAction(op) {
-        switch (op) {
-            case "B_following_minus_A_following": // A can follow B's unique following
-            case "A_following_minus_B_following": // B can follow A's unique following
-            case "A_followers_minus_following":   // A can follow their own unfollowed followers
-            case "B_followers_minus_following":   // B can follow their own unfollowed followers
-                return true;
-            default:
-                return false; // mutual / blocked / symmetric diff → info-only
-        }
-    }
+        compareButtonElement.addEventListener("click", () => {
+            window.location.reload();
+        });
 
-    function metaSourcesForOperation(op) {
-        switch (op) {
-            case "B_following_minus_A_following":
-            case "B_followers_minus_following":
-            case "B_blocked_intersect_following":
-                return [B.meta];
-            case "A_following_minus_B_following":
-            case "A_followers_minus_following":
-            case "A_blocked_intersect_following":
-                return [A.meta];
-            case "mutual_following":
-            case "symdiff_following":
-                return [A.meta, B.meta];
-            default:
-                return [A.meta, B.meta];
-        }
-    }
-
-    function runSelected() {
-        const op = document.getElementById("cmpOp").value;
-        let result;
-        switch (op) {
-            case "B_following_minus_A_following":
-                result = difference(B.following, A.following);
-                break;
-            case "A_following_minus_B_following":
-                result = difference(A.following, B.following);
-                break;
-            case "mutual_following":
-                result = intersection(A.following, B.following);
-                break;
-            case "A_followers_minus_following":
-                result = difference(A.followers, A.following);
-                break;
-            case "B_followers_minus_following":
-                result = difference(B.followers, B.following);
-                break;
-            case "A_blocked_intersect_following":
-                result = intersectWithIDSet(A.following, data?.A?.blocked || []);
-                break;
-            case "B_blocked_intersect_following":
-                result = intersectWithIDSet(B.following, data?.B?.blocked || []);
-                break;
-            case "symdiff_following":
-                result = symmetricDiff(A.following, B.following);
-                break;
-            default:
-                result = new Map();
-        }
-        const list = toList(result);
-        renderList(list, isFollowAction(op), metaSourcesForOperation(op));
-    }
-
-    document.getElementById("runCmp")?.addEventListener("click", runSelected);
-    attachSectionToggleBehavior();
-    // Optionally auto-run the selected option on load:
-    // runSelected();
-
-    function attachSectionToggleBehavior() {
-        const toggleButtons = document.querySelectorAll("." + CLASS_SECTION_TOGGLE);
-        toggleButtons.forEach(toggleButton => {
-            if (!(toggleButton instanceof HTMLElement)) return;
-            const sectionIdentifier = toggleButton.getAttribute(ATTRIBUTE_SECTION_TARGET) || "";
-            if (!sectionIdentifier) return;
-            const targetElement = document.getElementById(sectionIdentifier);
-            if (!(targetElement instanceof HTMLElement)) return;
-            if (!targetElement.classList.contains(CLASS_SECTION_CONTENT)) return;
-            toggleButton.addEventListener("click", event => {
-                event.preventDefault();
-                toggleSectionVisibility(toggleButton, targetElement);
+        if (resetButtonElement) {
+            resetButtonElement.addEventListener("click", () => {
+                clearUploads({
+                    compareButtonElement,
+                    uploadsListElement,
+                    placeholderElement,
+                    alertContainerElement,
+                });
             });
-            const shouldStartHidden = targetElement.classList.contains(CLASS_HIDDEN);
-            updateSectionVisibility(toggleButton, targetElement, shouldStartHidden);
-            if (!toggleButton.getAttribute(ATTRIBUTE_ARIA_CONTROLS)) {
-                toggleButton.setAttribute(ATTRIBUTE_ARIA_CONTROLS, sectionIdentifier);
+        }
+    }
+
+    function uploadArchives(fileList, options) {
+        const formData = new FormData();
+        for (const file of fileList) {
+            if (file instanceof File) {
+                formData.append("archives", file);
+            }
+        }
+        if (!formData.has("archives")) {
+            return;
+        }
+
+        setAlertMessage(options.alertContainerElement, "", false);
+
+        fetch(ROUTE_UPLOADS, {
+            method: HTTP_METHOD_POST,
+            body: formData,
+        }).then(response => {
+            if (!response.ok) {
+                return response.json().catch(() => ({})).then(body => {
+                    throw new Error(body[JSON_KEY_ERROR] || TEXT_UPLOAD_GENERIC_ERROR);
+                });
+            }
+            return response.json();
+        }).then(body => {
+            const uploads = Array.isArray(body[JSON_KEY_UPLOADS]) ? body[JSON_KEY_UPLOADS] : [];
+            renderUploadsList(uploads, options.uploadsListElement, options.placeholderElement);
+            const comparisonReady = Boolean(body[JSON_KEY_COMPARISON_READY]);
+            updateCompareButton(options.compareButtonElement, comparisonReady);
+        }).catch(error => {
+            setAlertMessage(options.alertContainerElement, error.message || TEXT_UPLOAD_GENERIC_ERROR, true);
+        });
+    }
+
+    function clearUploads(options) {
+        fetch(ROUTE_UPLOADS, {
+            method: HTTP_METHOD_DELETE,
+        }).then(response => {
+            if (!response.ok) {
+                return response.json().catch(() => ({})).then(body => {
+                    throw new Error(body[JSON_KEY_ERROR] || TEXT_RESET_GENERIC_ERROR);
+                });
+            }
+            renderUploadsList([], options.uploadsListElement, options.placeholderElement);
+            updateCompareButton(options.compareButtonElement, false);
+            setAlertMessage(options.alertContainerElement, "", false);
+        }).catch(error => {
+            setAlertMessage(options.alertContainerElement, error.message || TEXT_RESET_GENERIC_ERROR, true);
+        });
+    }
+
+    function renderUploadsList(uploads, listElement, placeholderElement) {
+        if (!listElement) {
+            return;
+        }
+        listElement.innerHTML = "";
+        if (!uploads || uploads.length === 0) {
+            const placeholder = placeholderElement || document.createElement("li");
+            placeholder.textContent = TEXT_UPLOAD_PLACEHOLDER;
+            placeholder.className = "list-group-item text-muted";
+            placeholder.id = ID_UPLOADS_PLACEHOLDER;
+            listElement.appendChild(placeholder);
+            return;
+        }
+        uploads.forEach(upload => {
+            const item = document.createElement("li");
+            item.className = "list-group-item";
+            const wrapper = document.createElement("div");
+            wrapper.className = "d-flex flex-column";
+
+            const slotBadge = document.createElement("span");
+            slotBadge.className = "badge bg-info text-dark align-self-start mb-2";
+            slotBadge.textContent = upload.slotLabel || "Archive";
+
+            const ownerLine = document.createElement("span");
+            ownerLine.className = "fw-semibold";
+            ownerLine.textContent = upload.ownerLabel || TEXT_UNKNOWN;
+
+            const fileLine = document.createElement("span");
+            fileLine.className = "text-muted small";
+            fileLine.textContent = upload.fileName || "";
+
+            wrapper.appendChild(slotBadge);
+            wrapper.appendChild(ownerLine);
+            wrapper.appendChild(fileLine);
+            item.appendChild(wrapper);
+            listElement.appendChild(item);
+        });
+    }
+
+    function updateCompareButton(compareButtonElement, enabled) {
+        if (!compareButtonElement) {
+            return;
+        }
+        if (enabled) {
+            compareButtonElement.removeAttribute("disabled");
+            compareButtonElement.classList.remove("btn-secondary");
+            compareButtonElement.classList.add("btn-success");
+        } else {
+            compareButtonElement.setAttribute("disabled", VALUE_TRUE);
+            compareButtonElement.classList.remove("btn-success");
+            compareButtonElement.classList.add("btn-secondary");
+        }
+    }
+
+    function setAlertMessage(containerElement, message, isError) {
+        if (!containerElement) {
+            return;
+        }
+        containerElement.innerHTML = "";
+        if (!message) {
+            return;
+        }
+        const alert = document.createElement("div");
+        alert.className = `alert ${isError ? "alert-danger" : "alert-info"}`;
+        alert.textContent = message;
+        containerElement.appendChild(alert);
+    }
+
+    function initializeMatrixFeatures() {
+        setupSectionToggles();
+
+        const matrixElement = document.getElementById(ID_MATRIX_DATA);
+        if (!matrixElement) {
+            return;
+        }
+        const matrixJSON = matrixElement.textContent || "";
+        if (!matrixJSON.trim()) {
+            return;
+        }
+        let matrixData;
+        try {
+            matrixData = JSON.parse(matrixJSON);
+        } catch (error) {
+            return;
+        }
+        if (!matrixData || !matrixData.A || !matrixData.B) {
+            return;
+        }
+        initializeComparisonCalculator(matrixData);
+    }
+
+    function setupSectionToggles() {
+        const toggleButtons = document.querySelectorAll(`.${CLASS_SECTION_TOGGLE}`);
+        toggleButtons.forEach(button => {
+            const targetId = button.getAttribute(ATTRIBUTE_SECTION_TARGET);
+            const target = targetId ? document.getElementById(targetId) : null;
+            const controlsId = button.getAttribute(ATTRIBUTE_ARIA_CONTROLS);
+            if (target && controlsId) {
+                button.addEventListener("click", () => {
+                    const isExpanded = button.getAttribute(ATTRIBUTE_ARIA_EXPANDED) === VALUE_TRUE;
+                    const nextState = !isExpanded;
+                    button.setAttribute(ATTRIBUTE_ARIA_EXPANDED, nextState ? VALUE_TRUE : VALUE_FALSE);
+                    button.textContent = nextState ? TEXT_HIDE : TEXT_SHOW;
+                    target.classList.toggle(CLASS_HIDDEN, !nextState);
+                });
             }
         });
     }
 
-    function toggleSectionVisibility(toggleButton, targetElement) {
-        const isCurrentlyHidden = targetElement.classList.contains(CLASS_HIDDEN);
-        updateSectionVisibility(toggleButton, targetElement, !isCurrentlyHidden);
+    function initializeComparisonCalculator(data) {
+        const ownerAData = buildOwnerData(data.A);
+        const ownerBData = buildOwnerData(data.B);
+        const metaContext = { A: ownerAData, B: ownerBData };
+        const operationSelect = document.getElementById(ID_COMPARISON_OPERATION);
+        const runButton = document.getElementById(ID_COMPARISON_BUTTON);
+        const outputContainer = document.getElementById(ID_COMPARISON_OUTPUT);
+
+        if (!operationSelect || !runButton || !outputContainer) {
+            return;
+        }
+
+        runButton.addEventListener("click", () => {
+            const operation = operationSelect.value;
+            const results = computeComparison(operation, ownerAData, ownerBData);
+            renderComparisonResults(results, outputContainer, operation, metaContext);
+        });
     }
 
-    function updateSectionVisibility(toggleButton, targetElement, shouldHide) {
-        if (shouldHide) {
-            targetElement.classList.add(CLASS_HIDDEN);
-            toggleButton.setAttribute(ATTRIBUTE_ARIA_EXPANDED, VALUE_STATE_FALSE);
-            toggleButton.textContent = TEXT_SHOW;
-        } else {
-            targetElement.classList.remove(CLASS_HIDDEN);
-            toggleButton.setAttribute(ATTRIBUTE_ARIA_EXPANDED, VALUE_STATE_TRUE);
-            toggleButton.textContent = TEXT_HIDE;
+    function buildOwnerData(owner) {
+        return {
+            followers: indexById(owner?.followers || []),
+            following: indexById(owner?.following || []),
+            muted: new Set(owner?.muted || []),
+            blocked: new Set(owner?.blocked || []),
+        };
+    }
+
+    function indexById(records) {
+        const indexed = new Map();
+        (records || []).forEach(record => {
+            if (record && record.AccountID) {
+                indexed.set(record.AccountID, record);
+            }
+        });
+        return indexed;
+    }
+
+    function computeComparison(operation, ownerAData, ownerBData) {
+        switch (operation) {
+            case "B_following_minus_A_following":
+                return difference(ownerBData.following, ownerAData.following);
+            case "A_following_minus_B_following":
+                return difference(ownerAData.following, ownerBData.following);
+            case "mutual_following":
+                return intersection(ownerAData.following, ownerBData.following);
+            case "A_followers_minus_following":
+                return difference(ownerAData.followers, ownerAData.following);
+            case "B_followers_minus_following":
+                return difference(ownerBData.followers, ownerBData.following);
+            case "A_blocked_intersect_following":
+                return intersectWithIDs(ownerAData.following, ownerAData.blocked);
+            case "B_blocked_intersect_following":
+                return intersectWithIDs(ownerBData.following, ownerBData.blocked);
+            case "symdiff_following":
+                return symmetricDifference(ownerAData.following, ownerBData.following);
+            default:
+                return new Map();
+        }
+    }
+
+    function difference(first, second) {
+        const results = new Map();
+        first.forEach((record, accountId) => {
+            if (!second.has(accountId)) {
+                results.set(accountId, record);
+            }
+        });
+        return results;
+    }
+
+    function intersection(first, second) {
+        const results = new Map();
+        first.forEach((record, accountId) => {
+            if (second.has(accountId)) {
+                results.set(accountId, record);
+            }
+        });
+        return results;
+    }
+
+    function symmetricDifference(first, second) {
+        const results = new Map();
+        first.forEach((record, accountId) => {
+            if (!second.has(accountId)) {
+                results.set(accountId, record);
+            }
+        });
+        second.forEach((record, accountId) => {
+            if (!first.has(accountId)) {
+                results.set(accountId, record);
+            }
+        });
+        return results;
+    }
+
+    function intersectWithIDs(records, identifiers) {
+        const results = new Map();
+        records.forEach((record, accountId) => {
+            if (identifiers.has(accountId)) {
+                results.set(accountId, record);
+            }
+        });
+        return results;
+    }
+
+    function renderComparisonResults(resultsMap, container, operation, metaContext) {
+        if (!container) {
+            return;
+        }
+        const records = Array.from(resultsMap.values());
+        records.sort((first, second) => {
+            const firstKey = (first.DisplayName || first.UserName || first.AccountID || "").toLowerCase();
+            const secondKey = (second.DisplayName || second.UserName || second.AccountID || "").toLowerCase();
+            return firstKey.localeCompare(secondKey);
+        });
+        if (records.length === 0) {
+            container.innerHTML = `<p class="text-muted fst-italic">${TEXT_NONE}</p>`;
+            return;
+        }
+        const metaSources = metaSourcesForOperation(operation, metaContext);
+        const itemsHTML = records.map(record => renderAccountRecord(record, metaSources, isFollowAction(operation))).join("");
+        container.innerHTML = `<ul class="list-unstyled mb-0">${itemsHTML}</ul>`;
+    }
+
+    function metaSourcesForOperation(operation, metaContext) {
+        switch (operation) {
+            case "B_following_minus_A_following":
+            case "B_followers_minus_following":
+            case "B_blocked_intersect_following":
+                return [metaLookupForOwner(metaContext.B)];
+            case "A_following_minus_B_following":
+            case "A_followers_minus_following":
+            case "A_blocked_intersect_following":
+                return [metaLookupForOwner(metaContext.A)];
+            case "mutual_following":
+            case "symdiff_following":
+                return [metaLookupForOwner(metaContext.A), metaLookupForOwner(metaContext.B)];
+            default:
+                return [metaLookupForOwner(metaContext.A), metaLookupForOwner(metaContext.B)];
+        }
+    }
+
+    function metaLookupForOwner(ownerData) {
+        const mutedSet = ownerData?.muted instanceof Set ? ownerData.muted : new Set();
+        const blockedSet = ownerData?.blocked instanceof Set ? ownerData.blocked : new Set();
+        return {
+            isMuted(accountId) {
+                return mutedSet.has(accountId);
+            },
+            isBlocked(accountId) {
+                return blockedSet.has(accountId);
+            },
+        };
+    }
+
+    function renderAccountRecord(record, metaSources, includeFollowAction) {
+        const profileURL = record.UserName ? `${PROFILE_BASE_URL}${record.UserName}` : `${PROFILE_ID_BASE_URL}${record.AccountID}`;
+        const displayText = record.DisplayName?.trim() || record.UserName?.trim() || record.AccountID || TEXT_UNKNOWN;
+        const handleText = record.UserName ? `${TEXT_HANDLE_PREFIX}${record.UserName}` : "";
+        const badges = [];
+        if (metaSources.some(source => source.isMuted(record.AccountID))) {
+            badges.push(`<span class="badge text-bg-warning me-2">${TEXT_MUTED}</span>`);
+        }
+        if (metaSources.some(source => source.isBlocked(record.AccountID))) {
+            badges.push(`<span class="badge text-bg-danger">${TEXT_BLOCKED}</span>`);
+        }
+        if (includeFollowAction) {
+            const intentURL = record.UserName
+                ? `${FOLLOW_SCREEN_NAME_URL}${encodeURIComponent(record.UserName)}`
+                : `${FOLLOW_ACCOUNT_ID_URL}${encodeURIComponent(record.AccountID)}`;
+            badges.push(`<a class="btn btn-sm btn-outline-primary ms-2" target="_blank" rel="noopener" href="${intentURL}">${TEXT_FOLLOW_BUTTON}</a>`);
+        }
+        const badgeHTML = badges.length ? `<div class="mt-2">${badges.join(" ")}</div>` : "";
+        const handleHTML = handleText ? `<span class="text-muted small">${escapeHTML(handleText)}</span>` : "";
+        return `<li class="mb-3 pb-3 border-bottom"><a class="text-decoration-none" target="_blank" rel="noopener" href="${profileURL}"><strong class="d-block">${escapeHTML(displayText)}</strong></a>${handleHTML}${badgeHTML}</li>`;
+    }
+
+    function escapeHTML(input) {
+        return (input || "").replace(/[&<>\"']/g, match => ({
+            "&": "&amp;",
+            "<": "&lt;",
+            ">": "&gt;",
+            "\"": "&quot;",
+            "'": "&#39;",
+        })[match]);
+    }
+
+    function isFollowAction(operation) {
+        switch (operation) {
+            case "B_following_minus_A_following":
+            case "A_following_minus_B_following":
+            case "A_followers_minus_following":
+            case "B_followers_minus_following":
+                return true;
+            default:
+                return false;
         }
     }
 })();

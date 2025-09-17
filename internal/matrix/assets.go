@@ -35,6 +35,11 @@ func embeddedText(path string) (string, error) {
 	return string(content), nil
 }
 
+// StaticAssets exposes the embedded static asset filesystem.
+func StaticAssets() (fs.FS, error) {
+	return fs.Sub(embeddedFS, "web/static")
+}
+
 func parseTemplates(fileSystem fs.FS, files ...string) (*template.Template, error) {
 	templateWithFuncs := template.New(templateBaseName).Funcs(template.FuncMap{
 		"profileURL": func(record AccountRecord) string {

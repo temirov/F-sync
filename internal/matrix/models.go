@@ -46,3 +46,10 @@ type ComparisonResult struct {
 	OwnerBBlockedAndFollowing []AccountRecord
 	OwnerBBlockedAndFollowers []AccountRecord
 }
+
+// UploadSummary describes an archive that has been uploaded for comparison.
+type UploadSummary struct {
+	SlotLabel  string
+	OwnerLabel string
+	FileName   string
+}
