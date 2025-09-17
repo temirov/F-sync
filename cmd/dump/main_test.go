@@ -146,6 +146,8 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 		snippetEmptyPlaceholder      = "<p class=\"muted\">None</p>"
 		snippetTableOfContentsNav    = "<nav class=\"toc\" aria-label=\"Page sections\">"
 		snippetTableOfContentsAnchor = "<a class=\"toc-link\" href=\"#overview\">Overview</a>"
+		snippetSectionToggleControl  = "<button type=\"button\" class=\"section-toggle\" data-section-id=\"overview-content\" aria-expanded=\"true\" aria-controls=\"overview-content\">Hide</button>"
+		snippetSectionContent        = "<div class=\"section-content\" id=\"overview-content\">"
 	)
 
 	decoratedRecord := dumpcmd.AccountRecord{AccountID: "42", UserName: "presented", DisplayName: "Muted Blocked"}
@@ -181,6 +183,8 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 				snippetEmbeddedCSSClass,
 				snippetTableOfContentsNav,
 				snippetTableOfContentsAnchor,
+				snippetSectionToggleControl,
+				snippetSectionContent,
 			},
 		},
 		{
@@ -203,6 +207,8 @@ func TestRenderComparisonPageStructure(t *testing.T) {
 				snippetEmptyPlaceholder,
 				snippetTableOfContentsNav,
 				snippetTableOfContentsAnchor,
+				snippetSectionToggleControl,
+				snippetSectionContent,
 			},
 		},
 	}

@@ -21,11 +21,21 @@
     const CLASS_BADGE_BLOCKED = "badge badge-block";
     const CLASS_BUTTON = "btn";
     const CLASS_MUTED_TEXT = "muted";
+    const CLASS_SECTION_TOGGLE = "section-toggle";
+    const CLASS_SECTION_CONTENT = "section-content";
+    const CLASS_HIDDEN = "is-hidden";
     const PROFILE_BASE_URL = "https://twitter.com/";
     const PROFILE_ID_BASE_URL = "https://twitter.com/i/user/";
     const FOLLOW_SCREEN_NAME_URL = "https://twitter.com/intent/follow?screen_name=";
     const FOLLOW_ACCOUNT_ID_URL = "https://twitter.com/intent/user?user_id=";
     const NONE_PLACEHOLDER_HTML = "<p class='" + CLASS_MUTED_TEXT + "'>" + TEXT_NONE + "</p>";
+    const ATTRIBUTE_SECTION_TARGET = "data-section-id";
+    const ATTRIBUTE_ARIA_CONTROLS = "aria-controls";
+    const ATTRIBUTE_ARIA_EXPANDED = "aria-expanded";
+    const VALUE_STATE_TRUE = "true";
+    const VALUE_STATE_FALSE = "false";
+    const TEXT_HIDE = "Hide";
+    const TEXT_SHOW = "Show";
 
     function indexById(arr) {
         const map = new Map();
@@ -226,6 +236,45 @@
     }
 
     document.getElementById("runCmp")?.addEventListener("click", runSelected);
+    attachSectionToggleBehavior();
     // Optionally auto-run the selected option on load:
     // runSelected();
+
+    function attachSectionToggleBehavior() {
+        const toggleButtons = document.querySelectorAll("." + CLASS_SECTION_TOGGLE);
+        toggleButtons.forEach(toggleButton => {
+            if (!(toggleButton instanceof HTMLElement)) return;
+            const sectionIdentifier = toggleButton.getAttribute(ATTRIBUTE_SECTION_TARGET) || "";
+            if (!sectionIdentifier) return;
+            const targetElement = document.getElementById(sectionIdentifier);
+            if (!(targetElement instanceof HTMLElement)) return;
+            if (!targetElement.classList.contains(CLASS_SECTION_CONTENT)) return;
+            toggleButton.addEventListener("click", event => {
+                event.preventDefault();
+                toggleSectionVisibility(toggleButton, targetElement);
+            });
+            const shouldStartHidden = targetElement.classList.contains(CLASS_HIDDEN);
+            updateSectionVisibility(toggleButton, targetElement, shouldStartHidden);
+            if (!toggleButton.getAttribute(ATTRIBUTE_ARIA_CONTROLS)) {
+                toggleButton.setAttribute(ATTRIBUTE_ARIA_CONTROLS, sectionIdentifier);
+            }
+        });
+    }
+
+    function toggleSectionVisibility(toggleButton, targetElement) {
+        const isCurrentlyHidden = targetElement.classList.contains(CLASS_HIDDEN);
+        updateSectionVisibility(toggleButton, targetElement, !isCurrentlyHidden);
+    }
+
+    function updateSectionVisibility(toggleButton, targetElement, shouldHide) {
+        if (shouldHide) {
+            targetElement.classList.add(CLASS_HIDDEN);
+            toggleButton.setAttribute(ATTRIBUTE_ARIA_EXPANDED, VALUE_STATE_FALSE);
+            toggleButton.textContent = TEXT_SHOW;
+        } else {
+            targetElement.classList.remove(CLASS_HIDDEN);
+            toggleButton.setAttribute(ATTRIBUTE_ARIA_EXPANDED, VALUE_STATE_TRUE);
+            toggleButton.textContent = TEXT_HIDE;
+        }
+    }
 })();
