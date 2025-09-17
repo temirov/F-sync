@@ -49,7 +49,7 @@ type ComparisonResult struct {
 
 // UploadSummary describes an archive that has been uploaded for comparison.
 type UploadSummary struct {
-	SlotLabel  string
-	OwnerLabel string
-	FileName   string
+	SlotLabel  string `json:"slotLabel"`
+	OwnerLabel string `json:"ownerLabel"`
+	FileName   string `json:"fileName"`
 }

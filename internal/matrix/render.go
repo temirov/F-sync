@@ -68,9 +68,9 @@ type comparisonPageViewModel struct {
 }
 
 type uploadSummaryViewModel struct {
-	SlotLabel string
-	Owner     string
-	FileName  string
+	SlotLabel  string
+	OwnerLabel string
+	FileName   string
 }
 
 type ownerListViewModel struct {
@@ -179,9 +179,9 @@ func newComparisonPageViewModel(pageData ComparisonPageData, cssText string, jsT
 		viewModel.Uploads = make([]uploadSummaryViewModel, 0, len(pageData.Uploads))
 		for _, upload := range pageData.Uploads {
 			viewModel.Uploads = append(viewModel.Uploads, uploadSummaryViewModel{
-				SlotLabel: upload.SlotLabel,
-				Owner:     upload.OwnerLabel,
-				FileName:  upload.FileName,
+				SlotLabel:  upload.SlotLabel,
+				OwnerLabel: upload.OwnerLabel,
+				FileName:   upload.FileName,
 			})
 		}
 	}

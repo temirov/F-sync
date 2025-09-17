@@ -143,6 +143,10 @@ func TestServeComparisonResponses(t *testing.T) {
 }
 
 func TestUploadArchivesFlow(t *testing.T) {
+	const (
+		expectedOwnerSummaryArchiveA = "Owner A (@owner_a)"
+		expectedOwnerSummaryArchiveB = "Owner B (@owner_b)"
+	)
 	router, err := server.NewRouter(server.RouterConfig{})
 	if err != nil {
 		t.Fatalf("NewRouter returned error: %v", err)
@@ -173,6 +177,12 @@ func TestUploadArchivesFlow(t *testing.T) {
 	if firstResponse.ComparisonReady {
 		t.Fatalf("expected comparison to be unavailable after first upload")
 	}
+	if len(firstResponse.Uploads) != 1 {
+		t.Fatalf("expected one upload in response, got %d", len(firstResponse.Uploads))
+	}
+	if firstResponse.Uploads[0].OwnerLabel != expectedOwnerSummaryArchiveA {
+		t.Fatalf("expected owner label %q, got %q", expectedOwnerSummaryArchiveA, firstResponse.Uploads[0].OwnerLabel)
+	}
 
 	// Second upload
 	recorder = httptest.NewRecorder()
@@ -187,6 +197,15 @@ func TestUploadArchivesFlow(t *testing.T) {
 	}
 	if !secondResponse.ComparisonReady {
 		t.Fatalf("expected comparison to be ready after second upload")
+	}
+	if len(secondResponse.Uploads) != 2 {
+		t.Fatalf("expected two uploads in response, got %d", len(secondResponse.Uploads))
+	}
+	if secondResponse.Uploads[0].OwnerLabel != expectedOwnerSummaryArchiveA {
+		t.Fatalf("expected first owner label %q, got %q", expectedOwnerSummaryArchiveA, secondResponse.Uploads[0].OwnerLabel)
+	}
+	if secondResponse.Uploads[1].OwnerLabel != expectedOwnerSummaryArchiveB {
+		t.Fatalf("expected second owner label %q, got %q", expectedOwnerSummaryArchiveB, secondResponse.Uploads[1].OwnerLabel)
 	}
 
 	// Ensure GET renders HTML containing the owner name
