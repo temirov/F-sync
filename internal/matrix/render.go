@@ -8,8 +8,15 @@ import (
 	"strings"
 )
 
+// ComparisonPageData captures the state needed to render the interactive comparison page.
+type ComparisonPageData struct {
+	Comparison *ComparisonResult
+	Uploads    []UploadSummary
+	Errors     []string
+}
+
 // RenderComparisonPage assembles the HTML output using the embedded assets and templates.
-func RenderComparisonPage(comparison ComparisonResult) (string, error) {
+func RenderComparisonPage(pageData ComparisonPageData) (string, error) {
 	cssText, err := embeddedText(embeddedBaseCSSPath)
 	if err != nil {
 		return "", err
@@ -18,11 +25,14 @@ func RenderComparisonPage(comparison ComparisonResult) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	matrixJSON, err := buildMatrixJSON(comparison)
-	if err != nil {
-		return "", err
+	matrixJSON := ""
+	if pageData.Comparison != nil {
+		matrixJSON, err = buildMatrixJSON(*pageData.Comparison)
+		if err != nil {
+			return "", err
+		}
 	}
-	viewModel := newComparisonPageViewModel(comparison, cssText, jsText, matrixJSON)
+	viewModel := newComparisonPageViewModel(pageData, cssText, jsText, matrixJSON)
 	tmpl, err := parseTemplates(embeddedFS, templateIndexFile)
 	if err != nil {
 		return "", fmt.Errorf("template parse: %w", err)
@@ -35,7 +45,8 @@ func RenderComparisonPage(comparison ComparisonResult) (string, error) {
 }
 
 type comparisonPageViewModel struct {
-	Title string
+	Title         string
+	HasComparison bool
 
 	OwnerA string
 	OwnerB string
@@ -48,9 +59,18 @@ type comparisonPageViewModel struct {
 	OwnerALists ownerListViewModel
 	OwnerBLists ownerListViewModel
 
+	Uploads []uploadSummaryViewModel
+	Errors  []string
+
 	MatrixJSON template.JS
 	CSS        template.CSS
 	JS         template.JS
+}
+
+type uploadSummaryViewModel struct {
+	SlotLabel  string
+	OwnerLabel string
+	FileName   string
 }
 
 type ownerListViewModel struct {
@@ -144,34 +164,56 @@ func (decorator accountBadgeDecorator) isBlocked(accountID string) bool {
 	return decorator.blockedIDs[accountID]
 }
 
-func newComparisonPageViewModel(comparison ComparisonResult, cssText string, jsText string, matrixJSON string) comparisonPageViewModel {
+func newComparisonPageViewModel(pageData ComparisonPageData, cssText string, jsText string, matrixJSON string) comparisonPageViewModel {
+	viewModel := comparisonPageViewModel{
+		Title: pageTitleText,
+		CSS:   template.CSS(cssText),
+		JS:    template.JS(jsText),
+	}
+
+	if len(pageData.Errors) > 0 {
+		viewModel.Errors = append(viewModel.Errors, pageData.Errors...)
+	}
+
+	if len(pageData.Uploads) > 0 {
+		viewModel.Uploads = make([]uploadSummaryViewModel, 0, len(pageData.Uploads))
+		for _, upload := range pageData.Uploads {
+			viewModel.Uploads = append(viewModel.Uploads, uploadSummaryViewModel{
+				SlotLabel:  upload.SlotLabel,
+				OwnerLabel: upload.OwnerLabel,
+				FileName:   upload.FileName,
+			})
+		}
+	}
+
+	if pageData.Comparison == nil {
+		return viewModel
+	}
+
+	comparison := *pageData.Comparison
 	ownerADecorator := newAccountBadgeDecorator(comparison.AccountSetsA.Muted, comparison.AccountSetsA.Blocked)
 	ownerBDecorator := newAccountBadgeDecorator(comparison.AccountSetsB.Muted, comparison.AccountSetsB.Blocked)
 
-	viewModel := comparisonPageViewModel{
-		Title:  pageTitleText,
-		OwnerA: ownerPretty(comparison.OwnerA),
-		OwnerB: ownerPretty(comparison.OwnerB),
-		OwnerALists: ownerListViewModel{
-			Friends:             ownerADecorator.Decorate(comparison.OwnerAFriends),
-			Leaders:             ownerADecorator.Decorate(comparison.OwnerALeaders),
-			Groupies:            ownerADecorator.Decorate(comparison.OwnerAGroupies),
-			BlockedAll:          ownerADecorator.Decorate(comparison.OwnerABlockedAll),
-			BlockedAndFollowing: ownerADecorator.Decorate(comparison.OwnerABlockedAndFollowing),
-			BlockedAndFollowers: ownerADecorator.Decorate(comparison.OwnerABlockedAndFollowers),
-		},
-		OwnerBLists: ownerListViewModel{
-			Friends:             ownerBDecorator.Decorate(comparison.OwnerBFriends),
-			Leaders:             ownerBDecorator.Decorate(comparison.OwnerBLeaders),
-			Groupies:            ownerBDecorator.Decorate(comparison.OwnerBGroupies),
-			BlockedAll:          ownerBDecorator.Decorate(comparison.OwnerBBlockedAll),
-			BlockedAndFollowing: ownerBDecorator.Decorate(comparison.OwnerBBlockedAndFollowing),
-			BlockedAndFollowers: ownerBDecorator.Decorate(comparison.OwnerBBlockedAndFollowers),
-		},
-		MatrixJSON: template.JS(matrixJSON),
-		CSS:        template.CSS(cssText),
-		JS:         template.JS(jsText),
+	viewModel.HasComparison = true
+	viewModel.OwnerA = ownerPretty(comparison.OwnerA)
+	viewModel.OwnerB = ownerPretty(comparison.OwnerB)
+	viewModel.OwnerALists = ownerListViewModel{
+		Friends:             ownerADecorator.Decorate(comparison.OwnerAFriends),
+		Leaders:             ownerADecorator.Decorate(comparison.OwnerALeaders),
+		Groupies:            ownerADecorator.Decorate(comparison.OwnerAGroupies),
+		BlockedAll:          ownerADecorator.Decorate(comparison.OwnerABlockedAll),
+		BlockedAndFollowing: ownerADecorator.Decorate(comparison.OwnerABlockedAndFollowing),
+		BlockedAndFollowers: ownerADecorator.Decorate(comparison.OwnerABlockedAndFollowers),
 	}
+	viewModel.OwnerBLists = ownerListViewModel{
+		Friends:             ownerBDecorator.Decorate(comparison.OwnerBFriends),
+		Leaders:             ownerBDecorator.Decorate(comparison.OwnerBLeaders),
+		Groupies:            ownerBDecorator.Decorate(comparison.OwnerBGroupies),
+		BlockedAll:          ownerBDecorator.Decorate(comparison.OwnerBBlockedAll),
+		BlockedAndFollowing: ownerBDecorator.Decorate(comparison.OwnerBBlockedAndFollowing),
+		BlockedAndFollowers: ownerBDecorator.Decorate(comparison.OwnerBBlockedAndFollowers),
+	}
+	viewModel.MatrixJSON = template.JS(matrixJSON)
 	viewModel.Counts.A.Followers = len(comparison.OwnerAFollowersAll)
 	viewModel.Counts.A.Following = len(comparison.OwnerAFollowingsAll)
 	viewModel.Counts.A.Friends = len(comparison.OwnerAFriends)
