@@ -11,6 +11,7 @@ import (
 	"encoding/csv"
 	"flag"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -19,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/f-sync/fsync/internal/intentparser"
 )
 
 type resolveJob struct {
@@ -29,11 +32,42 @@ type resolveJob struct {
 type resolveResult struct {
 	NumericID     string
 	Handle        string
+	DisplayName   string
 	ResolvedAtUTC string
 	Source        string
 	ErrorMessage  string
 	Index         int
 }
+
+const (
+	redirectBaseURL                 = "https://x.com/i/user/"
+	intentURLFormat                 = "https://x.com/intent/user?user_id=%s"
+	locationHeaderName              = "Location"
+	retryAfterHeaderName            = "Retry-After"
+	redirectSourceName              = "redirect"
+	intentSourceName                = "intent"
+	missingLocationHeaderMessage    = "no Location header"
+	parseLocationErrorFormat        = "parse Location: %v"
+	emptyHandleLocationMessage      = "empty handle in Location"
+	intentStatusErrorFormat         = "intent status: %s"
+	intentReadBodyErrorFormat       = "read intent body: %v"
+	intentRequestBuildErrorFormat   = "build intent request: %v"
+	redirectRequestBuildErrorFormat = "build redirect request: %v"
+	emptyIntentBodyMessage          = "intent body empty"
+	latestResolvedMessageFormat     = "Latest resolved: %s"
+	wroteOutputWithPreviewFormat    = "Wrote %s (%d rows). %s\n"
+	wroteOutputFormat               = "Wrote %s (%d rows)\n"
+	displayHandleFormat             = "%s (@%s)"
+	handleOnlyFormat                = "@%s"
+	csvColumnID                     = "id"
+	csvColumnHandle                 = "handle"
+	csvColumnDisplayName            = "display_name"
+	csvColumnResolvedAt             = "resolved_at_utc"
+	csvColumnSource                 = "source"
+	csvColumnError                  = "error"
+)
+
+var csvHeaderColumns = []string{csvColumnID, csvColumnHandle, csvColumnDisplayName, csvColumnResolvedAt, csvColumnSource, csvColumnError}
 
 func main() {
 	inputPath := flag.String("in", "", "Path to input file with one numeric ID per line")
@@ -100,46 +134,142 @@ func main() {
 		fmt.Fprintln(os.Stderr, writeErr)
 		os.Exit(1)
 	}
-	fmt.Printf("Wrote %s (%d rows)\n", *outputPath, len(results))
+	summaryMessage := latestResolvedSummary(results)
+	if summaryMessage != "" {
+		fmt.Printf(wroteOutputWithPreviewFormat, *outputPath, len(results), summaryMessage)
+	} else {
+		fmt.Printf(wroteOutputFormat, *outputPath, len(results))
+	}
 }
 
 func resolveOne(httpClient *http.Client, numericID string) resolveResult {
-	const base = "https://x.com/i/user/"
-	requestURL := base + numericID
+	resolvedAt := time.Now().UTC().Format(time.RFC3339)
+	result := resolveResult{NumericID: numericID, ResolvedAtUTC: resolvedAt}
 
-	req, _ := http.NewRequest(http.MethodGet, requestURL, nil)
-	resp, err := httpClient.Do(req)
-	now := time.Now().UTC().Format(time.RFC3339)
-
-	if err != nil {
-		return resolveResult{NumericID: numericID, ResolvedAtUTC: now, Source: "redirect", ErrorMessage: err.Error()}
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusTooManyRequests {
-		retryAfter := resp.Header.Get("Retry-After")
-		sleepDuration := backoffFromRetryAfter(retryAfter)
-		time.Sleep(sleepDuration)
-		return resolveOne(httpClient, numericID)
+	redirectHandle, redirectErr := fetchRedirectHandle(httpClient, numericID)
+	if redirectErr != nil {
+		result.Source = redirectSourceName
+		result.ErrorMessage = redirectErr.Error()
+	} else if redirectHandle != "" {
+		result.Handle = redirectHandle
+		result.Source = redirectSourceName
+		result.ErrorMessage = ""
 	}
 
-	location := resp.Header.Get("Location")
-	if location == "" {
-		return resolveResult{NumericID: numericID, ResolvedAtUTC: now, Source: "redirect", ErrorMessage: "no Location header"}
+	intentHTML, intentErr := fetchIntentHTML(httpClient, numericID)
+	if intentErr != nil {
+		if result.Handle == "" {
+			result.Source = intentSourceName
+		}
+		result.ErrorMessage = intentErr.Error()
+		return result
 	}
 
-	parsed, parseErr := url.Parse(location)
+	htmlParser := intentparser.NewIntentHTMLParser(intentHTML)
+	parsedHandle, parseErr := htmlParser.ExtractHandle()
 	if parseErr != nil {
-		return resolveResult{NumericID: numericID, ResolvedAtUTC: now, Source: "redirect", ErrorMessage: "parse Location: " + parseErr.Error()}
+		if result.Handle == "" {
+			result.Source = intentSourceName
+		}
+		result.ErrorMessage = parseErr.Error()
+		return result
 	}
 
-	cleanPath := strings.Trim(parsed.Path, "/")
-	segments := strings.Split(cleanPath, "/")
-	if len(segments) == 0 || segments[0] == "" {
-		return resolveResult{NumericID: numericID, ResolvedAtUTC: now, Source: "redirect", ErrorMessage: "empty handle in Location"}
+	result.Handle = parsedHandle
+	result.DisplayName = htmlParser.ExtractDisplayName(parsedHandle)
+	result.Source = intentSourceName
+	result.ErrorMessage = ""
+	return result
+}
+
+func fetchRedirectHandle(httpClient *http.Client, numericID string) (string, error) {
+	requestURL := redirectBaseURL + numericID
+	httpRequest, requestErr := http.NewRequest(http.MethodGet, requestURL, nil)
+	if requestErr != nil {
+		return "", fmt.Errorf(redirectRequestBuildErrorFormat, requestErr)
 	}
-	handle := segments[0]
-	return resolveResult{NumericID: numericID, Handle: handle, ResolvedAtUTC: now, Source: "redirect"}
+	httpResponse, httpErr := httpClient.Do(httpRequest)
+	if httpErr != nil {
+		return "", httpErr
+	}
+	if httpResponse.StatusCode == http.StatusTooManyRequests {
+		retryAfter := httpResponse.Header.Get(retryAfterHeaderName)
+		httpResponse.Body.Close()
+		time.Sleep(backoffFromRetryAfter(retryAfter))
+		return fetchRedirectHandle(httpClient, numericID)
+	}
+	defer httpResponse.Body.Close()
+
+	locationHeader := httpResponse.Header.Get(locationHeaderName)
+	if locationHeader == "" {
+		return "", fmt.Errorf(missingLocationHeaderMessage)
+	}
+	parsedLocation, parseErr := url.Parse(locationHeader)
+	if parseErr != nil {
+		return "", fmt.Errorf(parseLocationErrorFormat, parseErr)
+	}
+	cleanedPath := strings.Trim(parsedLocation.Path, "/")
+	pathSegments := strings.Split(cleanedPath, "/")
+	if len(pathSegments) == 0 || strings.TrimSpace(pathSegments[0]) == "" {
+		return "", fmt.Errorf(emptyHandleLocationMessage)
+	}
+	return pathSegments[0], nil
+}
+
+func fetchIntentHTML(httpClient *http.Client, numericID string) (string, error) {
+	requestURL := fmt.Sprintf(intentURLFormat, numericID)
+	httpRequest, requestErr := http.NewRequest(http.MethodGet, requestURL, nil)
+	if requestErr != nil {
+		return "", fmt.Errorf(intentRequestBuildErrorFormat, requestErr)
+	}
+	httpResponse, httpErr := httpClient.Do(httpRequest)
+	if httpErr != nil {
+		return "", httpErr
+	}
+	if httpResponse.StatusCode == http.StatusTooManyRequests {
+		retryAfter := httpResponse.Header.Get(retryAfterHeaderName)
+		httpResponse.Body.Close()
+		time.Sleep(backoffFromRetryAfter(retryAfter))
+		return fetchIntentHTML(httpClient, numericID)
+	}
+	defer httpResponse.Body.Close()
+	if httpResponse.StatusCode >= http.StatusBadRequest {
+		return "", fmt.Errorf(intentStatusErrorFormat, httpResponse.Status)
+	}
+	bodyBytes, readErr := io.ReadAll(httpResponse.Body)
+	if readErr != nil {
+		return "", fmt.Errorf(intentReadBodyErrorFormat, readErr)
+	}
+	htmlContent := string(bodyBytes)
+	if strings.TrimSpace(htmlContent) == "" {
+		return "", fmt.Errorf(emptyIntentBodyMessage)
+	}
+	return htmlContent, nil
+}
+
+func latestResolvedSummary(results []resolveResult) string {
+	for index := len(results) - 1; index >= 0; index-- {
+		label := formatResultLabel(results[index])
+		if label != "" {
+			return fmt.Sprintf(latestResolvedMessageFormat, label)
+		}
+	}
+	return ""
+}
+
+func formatResultLabel(result resolveResult) string {
+	displayName := strings.TrimSpace(result.DisplayName)
+	handle := strings.TrimSpace(result.Handle)
+	switch {
+	case displayName != "" && handle != "":
+		return fmt.Sprintf(displayHandleFormat, displayName, handle)
+	case handle != "":
+		return fmt.Sprintf(handleOnlyFormat, handle)
+	case strings.TrimSpace(result.NumericID) != "":
+		return strings.TrimSpace(result.NumericID)
+	default:
+		return ""
+	}
 }
 
 func readIDs(path string) ([]string, error) {
@@ -172,12 +302,11 @@ func writeCSV(path string, results []resolveResult) error {
 	w := csv.NewWriter(file)
 	defer w.Flush()
 
-	header := []string{"id", "handle", "resolved_at_utc", "source", "error"}
-	if err := w.Write(header); err != nil {
+	if err := w.Write(csvHeaderColumns); err != nil {
 		return err
 	}
-	for _, r := range results {
-		record := []string{r.NumericID, r.Handle, r.ResolvedAtUTC, r.Source, r.ErrorMessage}
+	for _, resolveOutcome := range results {
+		record := []string{resolveOutcome.NumericID, resolveOutcome.Handle, resolveOutcome.DisplayName, resolveOutcome.ResolvedAtUTC, resolveOutcome.Source, resolveOutcome.ErrorMessage}
 		if err := w.Write(record); err != nil {
 			return err
 		}

@@ -5,71 +5,27 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/f-sync/fsync/internal/intentparser"
 )
 
 const (
-	defaultIntentBaseURLString      = "https://x.com"
-	intentPathFormat                = "/intent/user?user_id=%s"
-	profileURLPattern               = `https://(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})`
-	htmlSingleQuoteCharacter        = "'"
-	htmlDoubleQuoteCharacter        = `"`
-	titleStartTag                   = "<title>"
-	titleEndTag                     = "</title>"
-	titleHandleDelimiter            = "(@"
-	titleSuffixDelimiter            = " / "
-	whitespaceCharacters            = " \t\r\n"
-	errMessageEmptyAccountID        = "account id cannot be empty"
-	errMessageMissingHandle         = "twitter intent page did not contain a handle"
-	errMessageEmptyIntentHTML       = "twitter intent page did not return any HTML"
-	defaultWorkerConcurrency        = 1
-	reservedHandlePathAnalytics     = "i"
-	reservedHandlePathIntent        = "intent"
-	reservedHandlePathHome          = "home"
-	reservedHandlePathTerms         = "tos"
-	reservedHandlePathPrivacy       = "privacy"
-	reservedHandlePathExplore       = "explore"
-	reservedHandlePathNotifications = "notifications"
-	reservedHandlePathSettings      = "settings"
-	reservedHandlePathLogin         = "login"
-	reservedHandlePathSignup        = "signup"
-	reservedHandlePathShare         = "share"
-	reservedHandlePathAccount       = "account"
-	reservedHandlePathCompose       = "compose"
-	reservedHandlePathMessages      = "messages"
-	reservedHandlePathSearch        = "search"
+	defaultIntentBaseURLString = "https://x.com"
+	intentPathFormat           = "/intent/user?user_id=%s"
+	errMessageEmptyAccountID   = "account id cannot be empty"
+	errMessageEmptyIntentHTML  = "twitter intent page did not return any HTML"
+	defaultWorkerConcurrency   = 1
 )
 
 var (
 	errEmptyAccountID  = errors.New(errMessageEmptyAccountID)
-	errMissingHandle   = errors.New(errMessageMissingHandle)
 	errEmptyIntentHTML = errors.New(errMessageEmptyIntentHTML)
-
-	profileURLRegex = regexp.MustCompile(profileURLPattern)
-
-	reservedHandleNames = map[string]struct{}{
-		reservedHandlePathAnalytics:     {},
-		reservedHandlePathIntent:        {},
-		reservedHandlePathHome:          {},
-		reservedHandlePathTerms:         {},
-		reservedHandlePathPrivacy:       {},
-		reservedHandlePathExplore:       {},
-		reservedHandlePathNotifications: {},
-		reservedHandlePathSettings:      {},
-		reservedHandlePathLogin:         {},
-		reservedHandlePathSignup:        {},
-		reservedHandlePathShare:         {},
-		reservedHandlePathAccount:       {},
-		reservedHandlePathCompose:       {},
-		reservedHandlePathMessages:      {},
-		reservedHandlePathSearch:        {},
-	}
 
 	globalAccountCache      = newAccountCache()
 	globalAccountFetchGroup singleflight.Group
@@ -227,13 +183,14 @@ func (resolver *Resolver) fetchAccount(ctx context.Context, accountID string) (A
 		return accountRecord, fetchErr
 	}
 
-	handle, handleErr := resolver.extractHandle(intentPage.HTML)
+	htmlParser := intentparser.NewIntentHTMLParser(intentPage.HTML)
+	handle, handleErr := htmlParser.ExtractHandle()
 	if handleErr != nil {
 		return accountRecord, handleErr
 	}
 	accountRecord.UserName = handle
 
-	displayName := parseDisplayName(intentPage.HTML)
+	displayName := htmlParser.ExtractDisplayName(handle)
 	if strings.TrimSpace(displayName) != "" {
 		accountRecord.DisplayName = displayName
 	}
@@ -242,51 +199,6 @@ func (resolver *Resolver) fetchAccount(ctx context.Context, accountID string) (A
 
 func (resolver *Resolver) intentURL(accountID string) string {
 	return resolver.baseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(intentPathFormat, accountID)}).String()
-}
-
-func (resolver *Resolver) extractHandle(htmlContent string) (string, error) {
-	normalizedHTML := strings.ReplaceAll(htmlContent, htmlSingleQuoteCharacter, htmlDoubleQuoteCharacter)
-	matches := profileURLRegex.FindAllStringSubmatch(normalizedHTML, -1)
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		candidate := strings.TrimSpace(match[1])
-		if candidate == "" {
-			continue
-		}
-		if resolver.isReservedHandle(candidate) {
-			continue
-		}
-		return candidate, nil
-	}
-	return "", errMissingHandle
-}
-
-func (resolver *Resolver) isReservedHandle(handle string) bool {
-	_, reserved := reservedHandleNames[strings.ToLower(handle)]
-	return reserved
-}
-
-func parseDisplayName(htmlContent string) string {
-	startIndex := strings.Index(htmlContent, titleStartTag)
-	if startIndex == -1 {
-		return ""
-	}
-	startIndex += len(titleStartTag)
-	endIndex := strings.Index(htmlContent[startIndex:], titleEndTag)
-	if endIndex == -1 {
-		return ""
-	}
-	endIndex += startIndex
-	titleContent := strings.Trim(htmlContent[startIndex:endIndex], whitespaceCharacters)
-	if cutIndex := strings.Index(titleContent, titleSuffixDelimiter); cutIndex >= 0 {
-		titleContent = strings.Trim(titleContent[:cutIndex], whitespaceCharacters)
-	}
-	if cutIndex := strings.Index(titleContent, titleHandleDelimiter); cutIndex >= 0 {
-		titleContent = strings.Trim(titleContent[:cutIndex], whitespaceCharacters)
-	}
-	return titleContent
 }
 
 func (resolver *Resolver) uniqueIDs(accountIDs []string) []string {
