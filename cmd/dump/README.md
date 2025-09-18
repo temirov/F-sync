@@ -2,15 +2,16 @@
 
 Generate an offline, human-readable HTML “relationship matrix” by comparing two X/Twitter data-export archives. See at a
 glance who is a **Friend** (mutual), **Leader** (you follow them, they don’t follow you), **Groupie** (they follow you,
-you don’t follow them), plus **diffs** (who B follows that A doesn’t) and **blocked/muted** cross-matches. No API calls
-or network access are required unless you opt into handle resolution with `--resolve-handles`.
+you don’t follow them), plus **diffs** (who B follows that A doesn’t) and **blocked/muted** cross-matches. The tool
+resolves missing handles by launching headless Chrome and following redirects on twitter.com, so ensure that network
+access and a Chrome/Chromium binary (exposed via `PATH` or `CHROME_BIN`) are available.
 
 ---
 
 ## Why this exists
 
-* **Offline, privacy-first**: Works entirely on your exported data (`.zip`) by default; optional handle resolution can
-  contact twitter.com to fill missing handles.
+* **Mostly local, privacy-aware**: Works on your exported data (`.zip`) and only reaches out to twitter.com to fill
+  missing handles using short-lived headless Chrome sessions.
 * **Actionable overview**: Summaries + categorized lists with direct profile/intent links.
 * **Deterministic**: Plain Go code, no heuristics beyond consistent parsing rules.
 
@@ -93,6 +94,7 @@ The parser tolerates typical “JS wrapper + JSON” formats in exports.
 
 * Go 1.21+ (or recent)
 * Two X/Twitter export ZIPs (for “Account A” and “Account B”)
+* Google Chrome or Chromium installed and discoverable via `PATH` or the `CHROME_BIN` environment variable
 
 ### Build
 
@@ -112,24 +114,22 @@ go build -o twitter_matrix .
 * `--zip-a` Path to the first export ZIP (treated as **A**)
 * `--zip-b` Path to the second export ZIP (treated as **B**)
 * `--out`  Output HTML file (default: `twitter_relationship_matrix.html`)
-* `--resolve-handles` Resolve missing handles/display names by following redirects on twitter.com (optional)
 
 Open the resulting HTML in your browser.
 
 ---
 
-### Handle resolution (optional)
+### Handle resolution (built-in)
 
-Some exports omit screen names for deactivated or protected accounts. When you pass `--resolve-handles`, the tool
+Some exports omit screen names for deactivated or protected accounts. The CLI now resolves those gaps automatically: it
 performs HTTPS HEAD/GET requests to `https://twitter.com/i/user/<account_id>` and inspects the redirect to recover the
-handle. It then fetches the redirected page title to extract a display name when available.
+handle. It then fetches the redirected page title to extract a display name when available. When individual lookups
+fail, the program prints warnings to `stderr` and continues rendering with numeric IDs.
 
 * Requests use conservative timeouts and never follow more than the initial redirect.
 * A bounded worker pool (default 8 workers) fans out requests so large exports finish promptly without hammering
   twitter.com.
 * Results are cached for the lifetime of the process, so repeated IDs are only fetched once.
-
-If the flag is omitted, no network calls are performed and the HTML output still links to the numeric-ID profile URLs.
 
 ---
 
@@ -174,7 +174,7 @@ So edits to `base.css` are picked up on the next build.
 
 ## Security & privacy
 
-* Operates entirely on local files by default; `--resolve-handles` performs outbound HTTPS lookups to twitter.com.
+* Operates on local files and performs outbound HTTPS lookups to twitter.com for missing handle lookups.
 * Does not write anything except the single HTML output file.
 * No token storage, no persistent cache.
 
