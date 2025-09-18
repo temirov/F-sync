@@ -84,7 +84,6 @@ type RouterConfig struct {
 	Service        ComparisonService
 	Store          ComparisonStore
 	Logger         *zap.Logger
-	ResolveHandles bool
 	HandleResolver matrix.AccountHandleResolver
 }
 
@@ -138,7 +137,6 @@ func NewRouter(configuration RouterConfig) (*gin.Engine, error) {
 		store:          store,
 		service:        service,
 		logger:         logger,
-		resolveHandles: configuration.ResolveHandles,
 		handleResolver: configuration.HandleResolver,
 	}
 
@@ -154,7 +152,6 @@ type applicationHandler struct {
 	store          ComparisonStore
 	service        ComparisonService
 	logger         *zap.Logger
-	resolveHandles bool
 	handleResolver matrix.AccountHandleResolver
 }
 
@@ -234,7 +231,7 @@ func (handler applicationHandler) uploadArchives(ginContext *gin.Context) {
 		}
 	}
 
-	if handler.resolveHandles && handler.handleResolver != nil && snapshot.ComparisonData != nil {
+	if handler.handleResolver != nil && snapshot.ComparisonData != nil {
 		handler.logger.Info(logMessageHandleResolution)
 		go handler.resolveHandlesAsync()
 	}

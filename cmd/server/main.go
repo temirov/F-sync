@@ -11,30 +11,27 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/f-sync/fsync/internal/handles"
-	"github.com/f-sync/fsync/internal/matrix"
 	"github.com/f-sync/fsync/internal/server"
 )
 
 const (
-	commandUse                    = "server"
-	commandShortDescription       = "Serve the comparison matrix over HTTP"
-	envPrefix                     = "FSYNC_SERVER"
-	flagResolveHandlesName        = "resolve-handles"
-	flagResolveHandlesDescription = "Resolve missing handles via HTTPS lookups"
-	flagHostName                  = "host"
-	flagHostDescription           = "Host interface for the HTTP server"
-	flagPortName                  = "port"
-	flagPortDescription           = "Port for the HTTP server"
-	defaultHost                   = "127.0.0.1"
-	defaultPort                   = 8080
-	errMessageLoggerCreate        = "create logger"
-	errMessageResolverCreate      = "create resolver"
-	errMessageListenAndServe      = "listen and serve"
-	logMessageResolvingHandles    = "resolving handles"
-	logMessageStartingServer      = "starting HTTP server"
-	logMessageServerStopped       = "server stopped"
-	logMessageListenError         = "server listen failure"
-	logFieldAddress               = "address"
+	commandUse                       = "server"
+	commandShortDescription          = "Serve the comparison matrix over HTTP"
+	envPrefix                        = "FSYNC_SERVER"
+	flagHostName                     = "host"
+	flagHostDescription              = "Host interface for the HTTP server"
+	flagPortName                     = "port"
+	flagPortDescription              = "Port for the HTTP server"
+	defaultHost                      = "127.0.0.1"
+	defaultPort                      = 8080
+	errMessageLoggerCreate           = "create logger"
+	errMessageResolverCreate         = "create resolver"
+	errMessageListenAndServe         = "listen and serve"
+	logMessageResolverInitialization = "initializing handle resolver"
+	logMessageStartingServer         = "starting HTTP server"
+	logMessageServerStopped          = "server stopped"
+	logMessageListenError            = "server listen failure"
+	logFieldAddress                  = "address"
 )
 
 func main() {
@@ -48,11 +45,9 @@ func newServerCommand() *cobra.Command {
 		RunE:  runServerCommand,
 	}
 
-	command.Flags().Bool(flagResolveHandlesName, false, flagResolveHandlesDescription)
 	command.Flags().String(flagHostName, defaultHost, flagHostDescription)
 	command.Flags().Int(flagPortName, defaultPort, flagPortDescription)
 
-	bindFlagToViper(command, flagResolveHandlesName)
 	bindFlagToViper(command, flagHostName)
 	bindFlagToViper(command, flagPortName)
 
@@ -80,19 +75,14 @@ func runServerCommand(*cobra.Command, []string) error {
 		_ = logger.Sync()
 	}()
 
-	var resolver matrix.AccountHandleResolver
-	if viper.GetBool(flagResolveHandlesName) {
-		logger.Info(logMessageResolvingHandles)
-		handlesResolver, resolverErr := handles.NewResolver(handles.Config{})
-		if resolverErr != nil {
-			return fmt.Errorf("%s: %w", errMessageResolverCreate, resolverErr)
-		}
-		resolver = handlesResolver
+	logger.Info(logMessageResolverInitialization)
+	resolver, resolverErr := handles.NewResolver(handles.Config{})
+	if resolverErr != nil {
+		return fmt.Errorf("%s: %w", errMessageResolverCreate, resolverErr)
 	}
 
 	router, err := server.NewRouter(server.RouterConfig{
 		Logger:         logger,
-		ResolveHandles: viper.GetBool(flagResolveHandlesName),
 		HandleResolver: resolver,
 	})
 	if err != nil {
