@@ -2,9 +2,9 @@
 
 Generate an offline, human-readable HTML “relationship matrix” by comparing two X/Twitter data-export archives. See at a
 glance who is a **Friend** (mutual), **Leader** (you follow them, they don’t follow you), **Groupie** (they follow you,
-you don’t follow them), plus **diffs** (who B follows that A doesn’t) and **blocked/muted** cross-matches. The tool
-resolves missing handles by launching headless Chrome and following redirects on twitter.com, so ensure that network
-access and a Chrome/Chromium binary (exposed via `PATH` or `CHROME_BIN`) are available.
+you don’t follow them), plus **diffs** (who B follows that A doesn’t) and **blocked/muted** cross-matches. Every run
+launches headless Chrome to resolve missing handles by following redirects on twitter.com, so a Chrome/Chromium binary
+(exposed via `PATH` or `CHROME_BIN`) and outbound network access are mandatory.
 
 ---
 
@@ -94,7 +94,10 @@ The parser tolerates typical “JS wrapper + JSON” formats in exports.
 
 * Go 1.21+ (or recent)
 * Two X/Twitter export ZIPs (for “Account A” and “Account B”)
-* Google Chrome or Chromium installed and discoverable via `PATH` or the `CHROME_BIN` environment variable
+* Google Chrome or Chromium installed and discoverable via `PATH` or the `CHROME_BIN` environment variable (the CLI exits
+  early when the browser is missing)
+* Outbound HTTPS access to `https://twitter.com` and `https://x.com` so the resolver can follow redirects for missing
+  handles
 
 ### Build
 
@@ -121,10 +124,12 @@ Open the resulting HTML in your browser.
 
 ### Handle resolution (built-in)
 
-Some exports omit screen names for deactivated or protected accounts. The CLI now resolves those gaps automatically: it
-performs HTTPS HEAD/GET requests to `https://twitter.com/i/user/<account_id>` and inspects the redirect to recover the
-handle. It then fetches the redirected page title to extract a display name when available. When individual lookups
-fail, the program prints warnings to `stderr` and continues rendering with numeric IDs.
+Some exports omit screen names for deactivated or protected accounts. The CLI resolves those gaps on every invocation:
+it performs HTTPS HEAD/GET requests to `https://twitter.com/i/user/<account_id>` and inspects the redirect to recover
+the handle. It then fetches the redirected page title to extract a display name when available. When individual lookups
+fail, the program prints warnings to `stderr` and continues rendering with numeric IDs. Because the resolver is always
+on, missing prerequisites (no Chrome, blocked network access, etc.) cause the CLI to exit with a fatal error before
+rendering output.
 
 * Requests use conservative timeouts and never follow more than the initial redirect.
 * A bounded worker pool (default 8 workers) fans out requests so large exports finish promptly without hammering
