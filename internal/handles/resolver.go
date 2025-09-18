@@ -4,10 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
-	"net"
-	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -17,34 +15,64 @@ import (
 )
 
 const (
-	defaultBaseURLString            = "https://twitter.com"
-	userPathFormat                  = "/i/user/%s"
-	locationHeaderName              = "Location"
+	defaultIntentBaseURLString      = "https://x.com"
+	intentPathFormat                = "/intent/user?user_id=%s"
+	profileURLPattern               = `https://(?:x|twitter)\.com/([A-Za-z0-9_]{1,15})`
+	htmlSingleQuoteCharacter        = "'"
+	htmlDoubleQuoteCharacter        = `"`
 	titleStartTag                   = "<title>"
 	titleEndTag                     = "</title>"
 	titleHandleDelimiter            = "(@"
 	titleSuffixDelimiter            = " / "
 	whitespaceCharacters            = " \t\r\n"
 	errMessageEmptyAccountID        = "account id cannot be empty"
-	errMessageMissingLocationHeader = "twitter profile redirect did not include a location header"
-	errMessageNoRedirect            = "twitter profile request did not return a redirect"
-	errMessageUnexpectedStatus      = "twitter profile request returned unexpected status code"
-	errMessageMissingHandle         = "twitter profile redirect did not contain a handle"
-	defaultUserAgentHeader          = "User-Agent"
-	defaultUserAgentValue           = "F-Sync-HandleResolver/1.0"
-	maxProfileHTMLBytes             = 128 * 1024
-	defaultDialTimeout              = 5 * time.Second
-	defaultTLSHandshakeTimeout      = 5 * time.Second
-	defaultResponseHeaderTimeout    = 10 * time.Second
-	defaultHTTPTimeout              = 15 * time.Second
-	defaultWorkerConcurrency        = 8
+	errMessageMissingHandle         = "twitter intent page did not contain a handle"
+	errMessageEmptyIntentHTML       = "twitter intent page did not return any HTML"
+	defaultWorkerConcurrency        = 1
+	reservedHandlePathAnalytics     = "i"
+	reservedHandlePathIntent        = "intent"
+	reservedHandlePathHome          = "home"
+	reservedHandlePathTerms         = "tos"
+	reservedHandlePathPrivacy       = "privacy"
+	reservedHandlePathExplore       = "explore"
+	reservedHandlePathNotifications = "notifications"
+	reservedHandlePathSettings      = "settings"
+	reservedHandlePathLogin         = "login"
+	reservedHandlePathSignup        = "signup"
+	reservedHandlePathShare         = "share"
+	reservedHandlePathAccount       = "account"
+	reservedHandlePathCompose       = "compose"
+	reservedHandlePathMessages      = "messages"
+	reservedHandlePathSearch        = "search"
 )
 
 var (
-	errEmptyAccountID        = errors.New(errMessageEmptyAccountID)
-	errMissingLocationHeader = errors.New(errMessageMissingLocationHeader)
-	errNoRedirect            = errors.New(errMessageNoRedirect)
-	errMissingHandle         = errors.New(errMessageMissingHandle)
+	errEmptyAccountID  = errors.New(errMessageEmptyAccountID)
+	errMissingHandle   = errors.New(errMessageMissingHandle)
+	errEmptyIntentHTML = errors.New(errMessageEmptyIntentHTML)
+
+	profileURLRegex = regexp.MustCompile(profileURLPattern)
+
+	reservedHandleNames = map[string]struct{}{
+		reservedHandlePathAnalytics:     {},
+		reservedHandlePathIntent:        {},
+		reservedHandlePathHome:          {},
+		reservedHandlePathTerms:         {},
+		reservedHandlePathPrivacy:       {},
+		reservedHandlePathExplore:       {},
+		reservedHandlePathNotifications: {},
+		reservedHandlePathSettings:      {},
+		reservedHandlePathLogin:         {},
+		reservedHandlePathSignup:        {},
+		reservedHandlePathShare:         {},
+		reservedHandlePathAccount:       {},
+		reservedHandlePathCompose:       {},
+		reservedHandlePathMessages:      {},
+		reservedHandlePathSearch:        {},
+	}
+
+	globalAccountCache      = newAccountCache()
+	globalAccountFetchGroup singleflight.Group
 )
 
 // AccountRecord captures the resolved handle information for a Twitter account.
@@ -62,50 +90,44 @@ type Result struct {
 
 // Config customizes a Resolver instance.
 type Config struct {
-	BaseURL       string
-	Client        *http.Client
-	MaxConcurrent int
+	BaseURL                 string
+	IntentFetcher           IntentFetcher
+	ChromeBinaryPath        string
+	ChromeUserAgent         string
+	ChromeVirtualTimeBudget time.Duration
+	ChromeRequestDelay      time.Duration
+	MaxConcurrent           int
 }
 
 // Resolver resolves Twitter handles for numeric account identifiers.
 type Resolver struct {
-	client      *http.Client
-	baseURL     *url.URL
-	workerCount int
-	cache       map[string]cacheEntry
-	cacheMutex  sync.RWMutex
-	flightGroup singleflight.Group
+	baseURL       *url.URL
+	workerCount   int
+	intentFetcher IntentFetcher
+	accountCache  *accountCache
+	fetchGroup    *singleflight.Group
 }
 
-type cacheEntry struct {
+type accountCacheEntry struct {
 	record AccountRecord
 	err    error
 }
 
-// NewResolver constructs a Resolver with sensible defaults for HTTP timeouts and redirect handling.
-func NewResolver(configuration Config) (*Resolver, error) {
-	baseURLString := configuration.BaseURL
-	if strings.TrimSpace(baseURLString) == "" {
-		baseURLString = defaultBaseURLString
-	}
-	parsedBaseURL, err := url.Parse(baseURLString)
-	if err != nil {
-		return nil, fmt.Errorf("parse base url: %w", err)
-	}
+// accountCache provides concurrency-safe storage for resolved account data.
+type accountCache struct {
+	entries map[string]accountCacheEntry
+	mutex   sync.RWMutex
+}
 
-	httpClient := configuration.Client
-	if httpClient == nil {
-		httpClient = newHTTPClient()
-	} else {
-		clonedClient := *httpClient
-		if clonedClient.Transport == nil {
-			clonedClient.Transport = defaultTransport()
-		}
-		clonedClient.CheckRedirect = preventRedirectFollowing
-		httpClient = &clonedClient
+// NewResolver constructs a Resolver with sensible defaults for intent lookups.
+func NewResolver(configuration Config) (*Resolver, error) {
+	baseURLString := strings.TrimSpace(configuration.BaseURL)
+	if baseURLString == "" {
+		baseURLString = defaultIntentBaseURLString
 	}
-	if httpClient.Timeout == 0 {
-		httpClient.Timeout = defaultHTTPTimeout
+	parsedBaseURL, parseErr := url.Parse(baseURLString)
+	if parseErr != nil {
+		return nil, fmt.Errorf("parse base url: %w", parseErr)
 	}
 
 	workerCount := configuration.MaxConcurrent
@@ -113,11 +135,27 @@ func NewResolver(configuration Config) (*Resolver, error) {
 		workerCount = defaultWorkerConcurrency
 	}
 
+	intentFetcher := configuration.IntentFetcher
+	if intentFetcher == nil {
+		chromeBinaryPath := resolveChromeBinaryPath(configuration)
+		chromeFetcher, chromeErr := NewChromeIntentFetcher(ChromeFetcherConfig{
+			BinaryPath:        chromeBinaryPath,
+			UserAgent:         configuration.ChromeUserAgent,
+			VirtualTimeBudget: configuration.ChromeVirtualTimeBudget,
+			RequestDelay:      configuration.ChromeRequestDelay,
+		})
+		if chromeErr != nil {
+			return nil, chromeErr
+		}
+		intentFetcher = chromeFetcher
+	}
+
 	resolver := &Resolver{
-		client:      httpClient,
-		baseURL:     parsedBaseURL,
-		workerCount: workerCount,
-		cache:       make(map[string]cacheEntry),
+		baseURL:       parsedBaseURL,
+		workerCount:   workerCount,
+		intentFetcher: intentFetcher,
+		accountCache:  globalAccountCache,
+		fetchGroup:    &globalAccountFetchGroup,
 	}
 	return resolver, nil
 }
@@ -138,9 +176,9 @@ func (resolver *Resolver) ResolveMany(ctx context.Context, accountIDs []string) 
 	for _, accountID := range uniqueAccountIDs {
 		accountID := accountID
 		group.Go(func() error {
-			record, err := resolver.ResolveAccount(ctx, accountID)
+			record, resolveErr := resolver.ResolveAccount(ctx, accountID)
 			resultsMutex.Lock()
-			results[accountID] = Result{Record: record, Err: err}
+			results[accountID] = Result{Record: record, Err: resolveErr}
 			resultsMutex.Unlock()
 			return nil
 		})
@@ -151,22 +189,18 @@ func (resolver *Resolver) ResolveMany(ctx context.Context, accountIDs []string) 
 
 // ResolveAccount resolves a single numeric account identifier into handle metadata.
 func (resolver *Resolver) ResolveAccount(ctx context.Context, accountID string) (AccountRecord, error) {
-	if strings.TrimSpace(accountID) == "" {
+	normalizedAccountID := strings.TrimSpace(accountID)
+	if normalizedAccountID == "" {
 		return AccountRecord{}, errEmptyAccountID
 	}
 
-	resolver.cacheMutex.RLock()
-	if entry, ok := resolver.cache[accountID]; ok {
-		resolver.cacheMutex.RUnlock()
-		return entry.record, entry.err
+	if cachedEntry, found := resolver.accountCache.Lookup(normalizedAccountID); found {
+		return cachedEntry.record, cachedEntry.err
 	}
-	resolver.cacheMutex.RUnlock()
 
-	resultChannel := resolver.flightGroup.DoChan(accountID, func() (interface{}, error) {
-		record, fetchErr := resolver.fetchAccount(ctx, accountID)
-		resolver.cacheMutex.Lock()
-		resolver.cache[accountID] = cacheEntry{record: record, err: fetchErr}
-		resolver.cacheMutex.Unlock()
+	resultChannel := resolver.fetchGroup.DoChan(normalizedAccountID, func() (interface{}, error) {
+		record, fetchErr := resolver.fetchAccount(ctx, normalizedAccountID)
+		resolver.accountCache.Store(normalizedAccountID, record, fetchErr)
 		if fetchErr != nil {
 			return record, fetchErr
 		}
@@ -186,123 +220,52 @@ func (resolver *Resolver) ResolveAccount(ctx context.Context, accountID string) 
 }
 
 func (resolver *Resolver) fetchAccount(ctx context.Context, accountID string) (AccountRecord, error) {
-	profile := AccountRecord{AccountID: accountID}
-	redirectURL, err := resolver.resolveRedirect(ctx, accountID)
-	if err != nil {
-		return profile, err
+	accountRecord := AccountRecord{AccountID: accountID}
+	intentRequest := IntentRequest{AccountID: accountID, URL: resolver.intentURL(accountID)}
+	intentPage, fetchErr := resolver.intentFetcher.FetchIntentPage(ctx, intentRequest)
+	if fetchErr != nil {
+		return accountRecord, fetchErr
 	}
 
-	handle, err := resolver.extractHandle(redirectURL)
-	if err != nil {
-		return profile, err
+	handle, handleErr := resolver.extractHandle(intentPage.HTML)
+	if handleErr != nil {
+		return accountRecord, handleErr
 	}
-	profile.UserName = handle
+	accountRecord.UserName = handle
 
-	displayName, displayErr := resolver.fetchDisplayName(ctx, redirectURL)
-	if displayErr == nil && strings.TrimSpace(displayName) != "" {
-		profile.DisplayName = displayName
+	displayName := parseDisplayName(intentPage.HTML)
+	if strings.TrimSpace(displayName) != "" {
+		accountRecord.DisplayName = displayName
 	}
-	return profile, nil
+	return accountRecord, nil
 }
 
-func (resolver *Resolver) resolveRedirect(ctx context.Context, accountID string) (string, error) {
-	profileURL := resolver.baseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(userPathFormat, accountID)}).String()
-	redirectURL, err := resolver.requestRedirect(ctx, http.MethodHead, profileURL)
-	if err != nil {
-		if !errors.Is(err, errNoRedirect) && !errors.Is(err, errMissingLocationHeader) {
-			return "", err
+func (resolver *Resolver) intentURL(accountID string) string {
+	return resolver.baseURL.ResolveReference(&url.URL{Path: fmt.Sprintf(intentPathFormat, accountID)}).String()
+}
+
+func (resolver *Resolver) extractHandle(htmlContent string) (string, error) {
+	normalizedHTML := strings.ReplaceAll(htmlContent, htmlSingleQuoteCharacter, htmlDoubleQuoteCharacter)
+	matches := profileURLRegex.FindAllStringSubmatch(normalizedHTML, -1)
+	for _, match := range matches {
+		if len(match) < 2 {
+			continue
 		}
-	}
-	if redirectURL != "" {
-		return redirectURL, nil
-	}
-	return resolver.requestRedirect(ctx, http.MethodGet, profileURL)
-}
-
-func (resolver *Resolver) requestRedirect(ctx context.Context, method string, requestURL string) (string, error) {
-	httpRequest, err := http.NewRequestWithContext(ctx, method, requestURL, nil)
-	if err != nil {
-		return "", err
-	}
-	httpRequest.Header.Set(defaultUserAgentHeader, defaultUserAgentValue)
-
-	httpResponse, err := resolver.client.Do(httpRequest)
-	if err != nil {
-		return "", err
-	}
-	defer func() {
-		io.Copy(io.Discard, io.LimitReader(httpResponse.Body, 1024))
-		httpResponse.Body.Close()
-	}()
-
-	if isRedirectStatus(httpResponse.StatusCode) {
-		location := httpResponse.Header.Get(locationHeaderName)
-		if strings.TrimSpace(location) == "" {
-			return "", errMissingLocationHeader
+		candidate := strings.TrimSpace(match[1])
+		if candidate == "" {
+			continue
 		}
-		return location, nil
+		if resolver.isReservedHandle(candidate) {
+			continue
+		}
+		return candidate, nil
 	}
-	if httpResponse.StatusCode == http.StatusMethodNotAllowed {
-		return "", errNoRedirect
-	}
-	if httpResponse.StatusCode >= 200 && httpResponse.StatusCode < 300 {
-		return "", errNoRedirect
-	}
-	return "", fmt.Errorf("%s: %d", errMessageUnexpectedStatus, httpResponse.StatusCode)
+	return "", errMissingHandle
 }
 
-func (resolver *Resolver) extractHandle(locationValue string) (string, error) {
-	parsedLocation, err := url.Parse(locationValue)
-	if err != nil {
-		return "", err
-	}
-	path := strings.Trim(parsedLocation.Path, "/")
-	if path == "" {
-		return "", errMissingHandle
-	}
-	segments := strings.Split(path, "/")
-	handle := segments[len(segments)-1]
-	if strings.TrimSpace(handle) == "" {
-		return "", errMissingHandle
-	}
-	return handle, nil
-}
-
-func (resolver *Resolver) fetchDisplayName(ctx context.Context, locationValue string) (string, error) {
-	profileURL, err := resolver.combineURL(locationValue)
-	if err != nil {
-		return "", err
-	}
-	httpRequest, err := http.NewRequestWithContext(ctx, http.MethodGet, profileURL, nil)
-	if err != nil {
-		return "", err
-	}
-	httpRequest.Header.Set(defaultUserAgentHeader, defaultUserAgentValue)
-
-	httpResponse, err := resolver.client.Do(httpRequest)
-	if err != nil {
-		return "", err
-	}
-	defer httpResponse.Body.Close()
-
-	if httpResponse.StatusCode < 200 || httpResponse.StatusCode >= 300 {
-		return "", fmt.Errorf("%s: %d", errMessageUnexpectedStatus, httpResponse.StatusCode)
-	}
-	limitedReader := io.LimitReader(httpResponse.Body, maxProfileHTMLBytes)
-	htmlBytes, err := io.ReadAll(limitedReader)
-	if err != nil {
-		return "", err
-	}
-	return parseDisplayName(string(htmlBytes)), nil
-}
-
-func (resolver *Resolver) combineURL(locationValue string) (string, error) {
-	parsedLocation, err := url.Parse(locationValue)
-	if err != nil {
-		return "", err
-	}
-	resolved := resolver.baseURL.ResolveReference(parsedLocation)
-	return resolved.String(), nil
+func (resolver *Resolver) isReservedHandle(handle string) bool {
+	_, reserved := reservedHandleNames[strings.ToLower(handle)]
+	return reserved
 }
 
 func parseDisplayName(htmlContent string) string {
@@ -330,42 +293,35 @@ func (resolver *Resolver) uniqueIDs(accountIDs []string) []string {
 	unique := make([]string, 0, len(accountIDs))
 	seen := make(map[string]struct{}, len(accountIDs))
 	for _, accountID := range accountIDs {
-		if strings.TrimSpace(accountID) == "" {
+		trimmed := strings.TrimSpace(accountID)
+		if trimmed == "" {
 			continue
 		}
-		if _, exists := seen[accountID]; exists {
+		if _, exists := seen[trimmed]; exists {
 			continue
 		}
-		seen[accountID] = struct{}{}
-		unique = append(unique, accountID)
+		seen[trimmed] = struct{}{}
+		unique = append(unique, trimmed)
 	}
 	return unique
 }
 
-func isRedirectStatus(statusCode int) bool {
-	return statusCode >= 300 && statusCode < 400
+// newAccountCache initializes an empty accountCache instance.
+func newAccountCache() *accountCache {
+	return &accountCache{entries: make(map[string]accountCacheEntry)}
 }
 
-func newHTTPClient() *http.Client {
-	return &http.Client{
-		Timeout:       defaultHTTPTimeout,
-		Transport:     defaultTransport(),
-		CheckRedirect: preventRedirectFollowing,
-	}
+// Lookup retrieves the cached entry for the supplied account identifier.
+func (cache *accountCache) Lookup(accountID string) (accountCacheEntry, bool) {
+	cache.mutex.RLock()
+	defer cache.mutex.RUnlock()
+	entry, found := cache.entries[accountID]
+	return entry, found
 }
 
-func defaultTransport() http.RoundTripper {
-	return &http.Transport{
-		Proxy:                 http.ProxyFromEnvironment,
-		DialContext:           (&net.Dialer{Timeout: defaultDialTimeout, KeepAlive: 30 * time.Second}).DialContext,
-		TLSHandshakeTimeout:   defaultTLSHandshakeTimeout,
-		IdleConnTimeout:       90 * time.Second,
-		MaxIdleConns:          100,
-		MaxConnsPerHost:       100,
-		ResponseHeaderTimeout: defaultResponseHeaderTimeout,
-	}
-}
-
-func preventRedirectFollowing(_ *http.Request, _ []*http.Request) error {
-	return http.ErrUseLastResponse
+// Store saves the provided account record and error result for reuse.
+func (cache *accountCache) Store(accountID string, record AccountRecord, resolveErr error) {
+	cache.mutex.Lock()
+	cache.entries[accountID] = accountCacheEntry{record: record, err: resolveErr}
+	cache.mutex.Unlock()
 }
