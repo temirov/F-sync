@@ -20,6 +20,13 @@ const (
 	matrixTestAccountIDSuccess        = "31002"
 	matrixTestAccountIDMissingHandle  = "31003"
 	matrixTestAccountIDFetcherFailure = "31004"
+	stubResolverUserName              = "stub-resolved"
+	stubResolverDisplayName           = "Stub Resolved"
+	archivedUserName                  = "archived"
+	archivedDisplayName               = "Archived Name"
+	resolvedUserName                  = "resolved"
+	resolvedDisplayName               = "Resolved Name"
+	stubFetchErrorMessage             = "fetch failed"
 )
 
 type stubIntentFetcher struct {
@@ -44,32 +51,45 @@ type stubResolver struct {
 	callCount atomic.Int32
 }
 
-func (resolver *stubResolver) ResolveMany(_ context.Context, _ []string) map[string]handles.Result {
+func (resolver *stubResolver) ResolveMany(_ context.Context, accountIDs []string) map[string]handles.Result {
 	resolver.callCount.Add(1)
-	return nil
+	results := make(map[string]handles.Result, len(accountIDs))
+	for _, accountID := range accountIDs {
+		results[accountID] = handles.Result{
+			Record: handles.AccountRecord{
+				AccountID:   accountID,
+				UserName:    stubResolverUserName,
+				DisplayName: stubResolverDisplayName,
+			},
+		}
+	}
+	return results
 }
 
-func TestMaybeResolveHandlesDisabled(t *testing.T) {
-	decoratedRecord := matrix.AccountRecord{AccountID: matrixTestAccountIDDisabled}
+func TestResolveHandlesResolverAvailability(t *testing.T) {
+	decoratedRecord := matrix.AccountRecord{AccountID: matrixTestAccountIDDisabled, UserName: archivedUserName, DisplayName: archivedDisplayName}
 	baseAccountSets := matrix.AccountSets{Followers: map[string]matrix.AccountRecord{matrixTestAccountIDDisabled: decoratedRecord}, Following: map[string]matrix.AccountRecord{matrixTestAccountIDDisabled: decoratedRecord}}
 
 	testCases := []struct {
-		name          string
-		resolver      matrix.AccountHandleResolver
-		shouldResolve bool
-		expectedCalls int32
+		name                string
+		resolver            matrix.AccountHandleResolver
+		expectedCalls       int32
+		expectedUserName    string
+		expectedDisplayName string
 	}{
 		{
-			name:          "resolution disabled via flag",
-			resolver:      &stubResolver{},
-			shouldResolve: false,
-			expectedCalls: 0,
+			name:                "resolver provided",
+			resolver:            &stubResolver{},
+			expectedCalls:       1,
+			expectedUserName:    stubResolverUserName,
+			expectedDisplayName: stubResolverDisplayName,
 		},
 		{
-			name:          "resolution disabled without resolver",
-			resolver:      nil,
-			shouldResolve: true,
-			expectedCalls: 0,
+			name:                "resolver missing",
+			resolver:            nil,
+			expectedCalls:       0,
+			expectedUserName:    archivedUserName,
+			expectedDisplayName: archivedDisplayName,
 		},
 	}
 
@@ -82,21 +102,38 @@ func TestMaybeResolveHandlesDisabled(t *testing.T) {
 				callCounter = &stub.callCount
 			}
 
-			result := matrix.MaybeResolveHandles(context.Background(), testCase.resolver, testCase.shouldResolve, &followerSet)
+			result := matrix.ResolveHandles(context.Background(), testCase.resolver, &followerSet)
 			if result != nil {
 				t.Fatalf("expected nil result, got %v", result)
 			}
-			if callCounter != nil && callCounter.Load() != testCase.expectedCalls {
+			if callCounter == nil {
+				if testCase.expectedCalls != 0 {
+					t.Fatalf("expected resolver to be invoked %d times", testCase.expectedCalls)
+				}
+			} else if callCounter.Load() != testCase.expectedCalls {
 				t.Fatalf("unexpected resolver call count: %d", callCounter.Load())
 			}
-			if followerSet.Followers[matrixTestAccountIDDisabled].UserName != "" {
-				t.Fatalf("expected follower username to remain empty")
+
+			followerRecord := followerSet.Followers[matrixTestAccountIDDisabled]
+			if followerRecord.UserName != testCase.expectedUserName {
+				t.Fatalf("unexpected follower username: %s", followerRecord.UserName)
+			}
+			if followerRecord.DisplayName != testCase.expectedDisplayName {
+				t.Fatalf("unexpected follower display name: %s", followerRecord.DisplayName)
+			}
+
+			followingRecord := followerSet.Following[matrixTestAccountIDDisabled]
+			if followingRecord.UserName != testCase.expectedUserName {
+				t.Fatalf("unexpected following username: %s", followingRecord.UserName)
+			}
+			if followingRecord.DisplayName != testCase.expectedDisplayName {
+				t.Fatalf("unexpected following display name: %s", followingRecord.DisplayName)
 			}
 		})
 	}
 }
 
-func TestMaybeResolveHandlesResolution(t *testing.T) {
+func TestResolveHandlesResolution(t *testing.T) {
 	testCases := []struct {
 		name                string
 		accountID           string
@@ -111,23 +148,27 @@ func TestMaybeResolveHandlesResolution(t *testing.T) {
 			name:                "successful resolution",
 			accountID:           matrixTestAccountIDSuccess,
 			htmlContent:         stubIntentHTMLSuccess,
-			expectedUserName:    "resolved",
-			expectedDisplayName: "Resolved Name",
+			expectedUserName:    resolvedUserName,
+			expectedDisplayName: resolvedDisplayName,
 			expectedCalls:       1,
 		},
 		{
-			name:          "missing handle in html",
-			accountID:     matrixTestAccountIDMissingHandle,
-			htmlContent:   stubIntentHTMLMissingHandle,
-			expectError:   true,
-			expectedCalls: 1,
+			name:                "missing handle in html",
+			accountID:           matrixTestAccountIDMissingHandle,
+			htmlContent:         stubIntentHTMLMissingHandle,
+			expectError:         true,
+			expectedUserName:    archivedUserName,
+			expectedDisplayName: archivedDisplayName,
+			expectedCalls:       1,
 		},
 		{
-			name:          "fetcher error",
-			accountID:     matrixTestAccountIDFetcherFailure,
-			fetchError:    errors.New("fetch failed"),
-			expectError:   true,
-			expectedCalls: 1,
+			name:                "fetcher error",
+			accountID:           matrixTestAccountIDFetcherFailure,
+			fetchError:          errors.New(stubFetchErrorMessage),
+			expectError:         true,
+			expectedUserName:    archivedUserName,
+			expectedDisplayName: archivedDisplayName,
+			expectedCalls:       1,
 		},
 	}
 
@@ -152,35 +193,42 @@ func TestMaybeResolveHandlesResolution(t *testing.T) {
 				t.Fatalf("create resolver: %v", err)
 			}
 
-			decoratedRecord := matrix.AccountRecord{AccountID: testCase.accountID}
+			decoratedRecord := matrix.AccountRecord{AccountID: testCase.accountID, UserName: archivedUserName, DisplayName: archivedDisplayName}
 			baseAccountSets := matrix.AccountSets{
 				Followers: map[string]matrix.AccountRecord{testCase.accountID: decoratedRecord},
 				Following: map[string]matrix.AccountRecord{testCase.accountID: decoratedRecord},
 			}
 
 			followerSet := copyAccountSets(baseAccountSets)
-			result := matrix.MaybeResolveHandles(context.Background(), resolver, true, &followerSet)
+			result := matrix.ResolveHandles(context.Background(), resolver, &followerSet)
 
 			if testCase.expectError {
 				if len(result) == 0 {
 					t.Fatalf("expected errors from resolution")
 				}
-				if followerSet.Followers[testCase.accountID].UserName != "" {
-					t.Fatalf("expected username to remain empty after failure")
+				if _, exists := result[testCase.accountID]; !exists {
+					t.Fatalf("expected error entry for %s", testCase.accountID)
 				}
 			} else {
-				if len(result) != 0 {
+				if result != nil {
 					t.Fatalf("expected no errors, received %v", result)
 				}
-				if followerSet.Followers[testCase.accountID].UserName != testCase.expectedUserName {
-					t.Fatalf("unexpected username: %s", followerSet.Followers[testCase.accountID].UserName)
-				}
-				if followerSet.Followers[testCase.accountID].DisplayName != testCase.expectedDisplayName {
-					t.Fatalf("unexpected display name: %s", followerSet.Followers[testCase.accountID].DisplayName)
-				}
-				if followerSet.Following[testCase.accountID].UserName != testCase.expectedUserName {
-					t.Fatalf("expected following record to be enriched")
-				}
+			}
+
+			followerRecord := followerSet.Followers[testCase.accountID]
+			if followerRecord.UserName != testCase.expectedUserName {
+				t.Fatalf("unexpected username: %s", followerRecord.UserName)
+			}
+			if followerRecord.DisplayName != testCase.expectedDisplayName {
+				t.Fatalf("unexpected display name: %s", followerRecord.DisplayName)
+			}
+
+			followingRecord := followerSet.Following[testCase.accountID]
+			if followingRecord.UserName != testCase.expectedUserName {
+				t.Fatalf("unexpected following username: %s", followingRecord.UserName)
+			}
+			if followingRecord.DisplayName != testCase.expectedDisplayName {
+				t.Fatalf("unexpected following display name: %s", followingRecord.DisplayName)
 			}
 
 			if fetcher.callCount.Load() != testCase.expectedCalls {

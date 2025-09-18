@@ -363,7 +363,7 @@ func (store *memoryComparisonStore) ResolveHandles(ctx context.Context, resolver
 
 	accountSetsPrimary := copyAccountSets(primary.accountSets)
 	accountSetsSecondary := copyAccountSets(secondary.accountSets)
-	errorsByAccountID := matrix.MaybeResolveHandles(ctx, resolver, true, &accountSetsPrimary, &accountSetsSecondary)
+	errorsByAccountID := matrix.ResolveHandles(ctx, resolver, &accountSetsPrimary, &accountSetsSecondary)
 
 	store.mutex.Lock()
 	if store.primary != nil && (sameOwner(store.primary.owner, primary.owner) || sameFileForUnknownOwner(*store.primary, primary)) {
