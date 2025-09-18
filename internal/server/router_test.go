@@ -13,10 +13,20 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/f-sync/fsync/internal/handles"
 	"github.com/f-sync/fsync/internal/matrix"
 	"github.com/f-sync/fsync/internal/server"
+)
+
+const (
+	stubSlotLabelPrimary          = "Archive A"
+	stubSlotLabelSecondary        = "Archive B"
+	handleResolutionWaitDuration  = 500 * time.Millisecond
+	handleResolutionNoCallTimeout = 100 * time.Millisecond
 )
 
 type comparisonServiceStub struct {
@@ -51,6 +61,84 @@ func (comparisonStoreStub) Clear() server.ComparisonSnapshot {
 }
 
 func (comparisonStoreStub) ResolveHandles(context.Context, matrix.AccountHandleResolver) map[string]error {
+	return nil
+}
+
+type resolvingStoreStub struct {
+	uploads        []server.ArchiveUpload
+	resolveSignals chan struct{}
+	mutex          sync.Mutex
+}
+
+func newResolvingStoreStub() *resolvingStoreStub {
+	return &resolvingStoreStub{resolveSignals: make(chan struct{}, 1)}
+}
+
+func (stub *resolvingStoreStub) Snapshot() server.ComparisonSnapshot {
+	stub.mutex.Lock()
+	defer stub.mutex.Unlock()
+	return stub.snapshotLocked()
+}
+
+func (stub *resolvingStoreStub) Upsert(upload server.ArchiveUpload) (server.ComparisonSnapshot, error) {
+	stub.mutex.Lock()
+	defer stub.mutex.Unlock()
+	stub.uploads = append(stub.uploads, upload)
+	return stub.snapshotLocked(), nil
+}
+
+func (stub *resolvingStoreStub) Clear() server.ComparisonSnapshot {
+	stub.mutex.Lock()
+	defer stub.mutex.Unlock()
+	stub.uploads = nil
+	return server.ComparisonSnapshot{}
+}
+
+func (stub *resolvingStoreStub) ResolveHandles(context.Context, matrix.AccountHandleResolver) map[string]error {
+	select {
+	case stub.resolveSignals <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+func (stub *resolvingStoreStub) snapshotLocked() server.ComparisonSnapshot {
+	uploads := make([]matrix.UploadSummary, 0, len(stub.uploads))
+	for index, upload := range stub.uploads {
+		slotLabel := stubSlotLabelPrimary
+		if index == 1 {
+			slotLabel = stubSlotLabelSecondary
+		}
+		uploads = append(uploads, matrix.UploadSummary{
+			SlotLabel:  slotLabel,
+			OwnerLabel: upload.Owner.DisplayName,
+			FileName:   upload.FileName,
+		})
+	}
+	var comparisonData *server.ComparisonData
+	if len(stub.uploads) >= 2 {
+		comparisonData = &server.ComparisonData{
+			AccountSetsA: stub.uploads[0].AccountSets,
+			AccountSetsB: stub.uploads[1].AccountSets,
+			OwnerA:       stub.uploads[0].Owner,
+			OwnerB:       stub.uploads[1].Owner,
+		}
+	}
+	return server.ComparisonSnapshot{Uploads: uploads, ComparisonData: comparisonData}
+}
+
+func (stub *resolvingStoreStub) waitForResolveHandles(timeout time.Duration) bool {
+	select {
+	case <-stub.resolveSignals:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+type accountHandleResolverStub struct{}
+
+func (accountHandleResolverStub) ResolveMany(context.Context, []string) map[string]handles.Result {
 	return nil
 }
 
@@ -217,6 +305,80 @@ func TestUploadArchivesFlow(t *testing.T) {
 	}
 	if !strings.Contains(recorder.Body.String(), "Owner A (@owner_a) — Relationship Matrix") {
 		t.Fatalf("expected rendered page to include owner name")
+	}
+}
+
+func TestUploadArchivesHandleResolution(t *testing.T) {
+	primaryArchiveContents := map[string]string{
+		"manifest.js":  `{"userInfo":{"accountId":"1","userName":"owner_a","displayName":"Owner A"}}`,
+		"following.js": `[{"following":{"accountId":"10","userName":"friend_a","displayName":"Friend A"}}]`,
+		"follower.js":  `[{"follower":{"accountId":"11","userName":"follower_a","displayName":"Follower A"}}]`,
+	}
+	secondaryArchiveContents := map[string]string{
+		"manifest.js":  `{"userInfo":{"accountId":"2","userName":"owner_b","displayName":"Owner B"}}`,
+		"following.js": `[{"following":{"accountId":"20","userName":"friend_b","displayName":"Friend B"}}]`,
+		"follower.js":  `[{"follower":{"accountId":"21","userName":"follower_b","displayName":"Follower B"}}]`,
+	}
+
+	testCases := []struct {
+		name             string
+		handleResolver   matrix.AccountHandleResolver
+		expectResolution bool
+	}{
+		{
+			name:             "handle resolver triggers asynchronous resolution",
+			handleResolver:   accountHandleResolverStub{},
+			expectResolution: true,
+		},
+		{
+			name:             "missing resolver skips asynchronous resolution",
+			handleResolver:   nil,
+			expectResolution: false,
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			store := newResolvingStoreStub()
+			router, err := server.NewRouter(server.RouterConfig{
+				Store:          store,
+				HandleResolver: testCase.handleResolver,
+			})
+			if err != nil {
+				t.Fatalf("NewRouter returned error: %v", err)
+			}
+
+			archiveA := createArchive(t, primaryArchiveContents)
+			archiveB := createArchive(t, secondaryArchiveContents)
+
+			recorder := httptest.NewRecorder()
+			request := newUploadRequest(t, archiveA)
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+			}
+			if store.waitForResolveHandles(handleResolutionNoCallTimeout) {
+				t.Fatalf("handle resolution triggered before comparison was ready")
+			}
+
+			recorder = httptest.NewRecorder()
+			request = newUploadRequest(t, archiveB)
+			router.ServeHTTP(recorder, request)
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+			}
+
+			if testCase.expectResolution {
+				if !store.waitForResolveHandles(handleResolutionWaitDuration) {
+					t.Fatalf("expected handle resolution to be triggered")
+				}
+			} else {
+				if store.waitForResolveHandles(handleResolutionNoCallTimeout) {
+					t.Fatalf("did not expect handle resolution to be triggered")
+				}
+			}
+		})
 	}
 }
 
