@@ -4,110 +4,169 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"context"
+	"encoding/csv"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 )
 
 const (
-	defaultChromeBinaryPath             = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-	virtualTimeBudgetMillisecondsString = "15000"
-	renderTimeoutSeconds                = 30
-	explicitUserAgentString             = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
-	intentUserURLTemplate               = "https://x.com/intent/user?user_id=%s"
+	defaultChromeBinaryPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 )
 
 var (
-	// HTTPS-only, exactly matching: grep -Eo 'https://(x|twitter)\.com/[A-Za-z0-9_]{1,15}'
 	profileURLRegex = regexp.MustCompile(`https://(?:x|twitter)\.com/[A-Za-z0-9_]{1,15}`)
 
-	// Reserved top-level paths to exclude
 	reservedTopLevelPaths = map[string]struct{}{
 		"i": {}, "intent": {}, "home": {}, "tos": {}, "privacy": {}, "explore": {},
 		"notifications": {}, "settings": {}, "login": {}, "signup": {}, "share": {},
 		"account": {}, "compose": {}, "messages": {}, "search": {},
 	}
+
+	metaOGTitle  = regexp.MustCompile(`property="og:title"[^>]*content="([^"]+)"`)
+	metaTitleTag = regexp.MustCompile(`<title[^>]*>([^<]+)</title>`)
+
+	uaPool = []string{
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.850.0 Safari/537.36",
+	}
 )
 
+type profileInfo struct {
+	ID          string `json:"id"`
+	Handle      string `json:"handle"`
+	DisplayName string `json:"display_name"`
+	FromURL     string `json:"from_url"`
+	Err         string `json:"error,omitempty"`
+}
+
 func main() {
-	outputCSV := flag.Bool("csv", false, "output CSV: id,handle")
+	flagCSV := flag.Bool("csv", false, "output CSV: id,handle,display_name")
+	flagJSON := flag.Bool("json", false, "output JSON lines")
+	flagChrome := flag.String("chrome", defaultChromePath(), "path to Chrome/Chromium binary (or set CHROME_BIN)")
+	flagVT := flag.Int("vtbudget", 15000, "Chrome virtual time budget (ms)")
+	flagTimeout := flag.Duration("timeout", 30*time.Second, "per-ID timeout")
+	flagDelay := flag.Duration("delay", 500*time.Millisecond, "fixed delay between requests")
 	flag.Parse()
 
 	chromeBinaryPath := os.Getenv("CHROME_BIN")
 	if chromeBinaryPath == "" {
-		chromeBinaryPath = defaultChromeBinaryPath
+		chromeBinaryPath = *flagChrome
 	}
 
-	var identifiers []string
-	if flag.NArg() > 0 {
-		for _, arg := range flag.Args() {
-			trimmed := strings.TrimSpace(arg)
-			if trimmed != "" {
-				identifiers = append(identifiers, trimmed)
+	ids := collectIDs(flag.Args())
+	if len(ids) == 0 {
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			if s := strings.TrimSpace(sc.Text()); s != "" {
+				ids = append(ids, s)
 			}
 		}
-	} else {
-		inputScanner := bufio.NewScanner(os.Stdin)
-		for inputScanner.Scan() {
-			trimmed := strings.TrimSpace(inputScanner.Text())
-			if trimmed != "" {
-				identifiers = append(identifiers, trimmed)
-			}
-		}
-		if err := inputScanner.Err(); err != nil {
+		if err := sc.Err(); err != nil {
 			fmt.Fprintln(os.Stderr, "stdin read error:", err)
 			os.Exit(2)
 		}
 	}
-
-	// If still nothing, treat as single-id usage error (keeps old UX sane)
-	if len(identifiers) == 0 {
+	if len(ids) == 0 {
 		fmt.Fprintln(os.Stderr, "usage:")
 		fmt.Fprintln(os.Stderr, "  cresolve <numeric_id>")
 		fmt.Fprintln(os.Stderr, "  cresolve -csv <id1> <id2> ...")
-		fmt.Fprintln(os.Stderr, "  cat ids.txt | cresolve -csv")
+		fmt.Fprintln(os.Stderr, "  cat ids.txt | cresolve -json")
 		os.Exit(2)
 	}
 
-	for _, numericIdentifier := range identifiers {
-		targetPageURL := fmt.Sprintf(intentUserURLTemplate, numericIdentifier)
+	rand.Seed(time.Now().UnixNano())
 
-		renderedHTML, execError := renderWithHeadlessChrome(chromeBinaryPath, targetPageURL)
-		var resolvedHandle string
-		if execError == nil && strings.TrimSpace(renderedHTML) != "" {
-			normalizedHTML := strings.ReplaceAll(renderedHTML, `'`, `"`)
-			matches := profileURLRegex.FindAllString(normalizedHTML, -1)
-			for _, matchedURL := range matches {
-				candidate := stripDomainPrefix(matchedURL)
-				if isReserved(candidate) {
-					continue
+	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// CSV writer if needed — write header ONCE
+	var csvWriter *csv.Writer
+	if *flagCSV {
+		csvWriter = csv.NewWriter(os.Stdout)
+		_ = csvWriter.Write([]string{"id", "handle", "display_name"})
+		csvWriter.Flush()
+	}
+
+	for _, id := range ids {
+		select {
+		case <-rootCtx.Done():
+			return
+		default:
+		}
+
+		perIDCtx, perCancel := context.WithTimeout(rootCtx, *flagTimeout)
+		info := resolveOne(perIDCtx, chromeBinaryPath, *flagVT, id)
+		perCancel()
+
+		switch {
+		case *flagJSON:
+			enc := json.NewEncoder(os.Stdout)
+			_ = enc.Encode(info)
+		case *flagCSV:
+			_ = csvWriter.Write([]string{info.ID, info.Handle, info.DisplayName})
+			csvWriter.Flush()
+		default:
+			if info.Handle != "" {
+				fmt.Printf("%s: %s (retrieved from %s)\n", info.ID, info.Handle, info.FromURL)
+				if info.DisplayName != "" {
+					fmt.Printf("  name: %s\n", info.DisplayName)
 				}
-				resolvedHandle = candidate
-				break // equivalent to head -n1
+			} else {
+				fmt.Printf("%s:\n", info.ID)
+				if info.Err != "" {
+					fmt.Printf("  err:  %s\n", info.Err)
+				}
 			}
 		}
 
-		if *outputCSV {
-			// CSV: id,handle (blank handle on failure)
-			fmt.Printf("%s,%s\n", numericIdentifier, resolvedHandle)
-		} else {
-			// Pretty: id: handle (retrieved from URL) or id:
-			if resolvedHandle != "" {
-				fmt.Printf("%s: %s (retrieved from %s)\n", numericIdentifier, resolvedHandle, targetPageURL)
-			} else {
-				fmt.Printf("%s:\n", numericIdentifier)
-			}
+		select {
+		case <-time.After(*flagDelay):
+		case <-rootCtx.Done():
+			return
 		}
 	}
 }
 
-func renderWithHeadlessChrome(chromeBinaryPath, targetPageURL string) (string, error) {
-	execArguments := []string{
+func resolveOne(ctx context.Context, chromeBinaryPath string, vtBudgetMS int, id string) profileInfo {
+	intentURL := "https://x.com/intent/user?user_id=" + id
+	userAgent := uaPool[rand.Intn(len(uaPool))]
+
+	htmlDoc, err := renderWithHeadlessChrome(ctx, chromeBinaryPath, userAgent, vtBudgetMS, intentURL)
+	if err != nil || strings.TrimSpace(htmlDoc) == "" {
+		msg := ""
+		if err != nil {
+			msg = err.Error()
+		}
+		return profileInfo{ID: id, FromURL: intentURL, Err: msg}
+	}
+
+	normalized := strings.ReplaceAll(htmlDoc, `'`, `"`)
+	handle := extractHandle(normalized)
+	display := extractDisplayName(normalized, handle)
+
+	return profileInfo{
+		ID:          id,
+		Handle:      handle,
+		DisplayName: display,
+		FromURL:     intentURL,
+	}
+}
+
+func renderWithHeadlessChrome(ctx context.Context, chromeBinaryPath, userAgent string, vtBudgetMS int, targetPageURL string) (string, error) {
+	args := []string{
 		"--headless=new",
 		"--disable-gpu",
 		"--use-gl=swiftshader",
@@ -118,46 +177,98 @@ func renderWithHeadlessChrome(chromeBinaryPath, targetPageURL string) (string, e
 		"--log-level=3",
 		"--silent",
 		"--disable-logging",
-		"--user-agent=" + explicitUserAgentString, // enforce UA
-		"--virtual-time-budget=" + virtualTimeBudgetMillisecondsString,
+		"--user-agent=" + userAgent,
+		fmt.Sprintf("--virtual-time-budget=%d", vtBudgetMS),
 		"--dump-dom",
 		targetPageURL,
 	}
-	execCommand := exec.Command(chromeBinaryPath, execArguments...)
-	var stdoutBuffer bytes.Buffer
-	execCommand.Stdout = &stdoutBuffer
-	execCommand.Stderr = io.Discard // silence Chrome noise
+	cmd := exec.CommandContext(ctx, chromeBinaryPath, args...)
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = io.Discard
 
-	if startError := execCommand.Start(); startError != nil {
-		return "", startError
+	if err := cmd.Start(); err != nil {
+		return "", err
 	}
 
-	doneChannel := make(chan error, 1)
-	go func() { doneChannel <- execCommand.Wait() }()
+	waitCh := make(chan error, 1)
+	go func() { waitCh <- cmd.Wait() }()
 
 	select {
-	case waitError := <-doneChannel:
-		if waitError != nil {
-			return "", waitError
+	case <-ctx.Done():
+		_ = cmd.Process.Kill()
+		<-waitCh
+		return "", ctx.Err()
+	case err := <-waitCh:
+		if err != nil {
+			return "", err
 		}
-	case <-time.After(renderTimeoutSeconds * time.Second):
-		_ = execCommand.Process.Kill()
-		return "", fmt.Errorf("chrome render timeout")
+		return stdout.String(), nil
 	}
+}
 
-	return stdoutBuffer.String(), nil
+func extractHandle(htmlDoc string) string {
+	for _, full := range profileURLRegex.FindAllString(htmlDoc, -1) {
+		h := stripDomainPrefix(full)
+		if !isReserved(h) {
+			return h
+		}
+	}
+	return ""
+}
+
+func extractDisplayName(htmlDoc string, handle string) string {
+	title := firstGroup(metaOGTitle.FindStringSubmatch(htmlDoc))
+	if title == "" {
+		title = firstGroup(metaTitleTag.FindStringSubmatch(htmlDoc))
+	}
+	if title == "" {
+		return ""
+	}
+	if idx := strings.Index(title, "(@"); idx > 0 {
+		return strings.TrimSpace(title[:idx])
+	}
+	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(title, " / X"), " on X"))
+	if handle != "" {
+		name = strings.ReplaceAll(name, "(@"+handle+")", "")
+		name = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(name, " / X"), " on X"))
+	}
+	return strings.TrimSpace(name)
 }
 
 func stripDomainPrefix(fullURL string) string {
-	// Equivalent to: sed -E 's#https?://(x|twitter)\.com/##' (HTTPS-only here)
 	fullURL = strings.TrimPrefix(fullURL, "https://")
-	if slashIndex := strings.IndexByte(fullURL, '/'); slashIndex >= 0 {
-		return fullURL[slashIndex+1:] // handle
+	if i := strings.IndexByte(fullURL, '/'); i >= 0 {
+		return fullURL[i+1:]
 	}
 	return fullURL
 }
 
 func isReserved(handle string) bool {
-	_, isBad := reservedTopLevelPaths[strings.ToLower(handle)]
-	return isBad
+	_, bad := reservedTopLevelPaths[strings.ToLower(handle)]
+	return bad
+}
+
+func firstGroup(m []string) string {
+	if len(m) >= 2 {
+		return m[1]
+	}
+	return ""
+}
+
+func collectIDs(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if s := strings.TrimSpace(a); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func defaultChromePath() string {
+	if v := os.Getenv("CHROME_BIN"); v != "" {
+		return v
+	}
+	return defaultChromeBinaryPath
 }
