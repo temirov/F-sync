@@ -17,8 +17,6 @@ const (
 	flagZipBDescription         = "Path to second Twitter data zip"
 	flagOutName                 = "out"
 	flagOutDescription          = "Output HTML file path"
-	flagResolveHandlesName      = "resolve-handles"
-	flagResolveHandlesDesc      = "Resolve missing handles over the network"
 	defaultOutputFileName       = "twitter_relationship_matrix.html"
 	missingZipErrorMessage      = "error: both --zip-a and --zip-b are required"
 	handleResolutionErrorFormat = "warning: handle lookup for %s failed: %v\n"
@@ -33,12 +31,10 @@ func main() {
 	var zipPathA string
 	var zipPathB string
 	var outputPath string
-	var resolveHandles bool
 
 	flag.StringVar(&zipPathA, flagZipAName, "", flagZipADescription)
 	flag.StringVar(&zipPathB, flagZipBName, "", flagZipBDescription)
 	flag.StringVar(&outputPath, flagOutName, defaultOutputFileName, flagOutDescription)
-	flag.BoolVar(&resolveHandles, flagResolveHandlesName, false, flagResolveHandlesDesc)
 	flag.Parse()
 
 	if zipPathA == "" || zipPathB == "" {
@@ -55,15 +51,13 @@ func main() {
 		dief(loadErrorFormat, zipPathB, err)
 	}
 
-	if resolveHandles {
-		resolver, err := handles.NewResolver(handles.Config{})
-		if err != nil {
-			dief(handlesResolverErrorFormat, err)
-		}
-		resolutionErrors := matrix.MaybeResolveHandles(context.Background(), resolver, true, &accountSetsA, &accountSetsB)
-		for accountID, resolutionErr := range resolutionErrors {
-			fmt.Fprintf(os.Stderr, handleResolutionErrorFormat, accountID, resolutionErr)
-		}
+	resolver, err := handles.NewResolver(handles.Config{})
+	if err != nil {
+		dief(handlesResolverErrorFormat, err)
+	}
+	resolutionErrors := matrix.MaybeResolveHandles(context.Background(), resolver, true, &accountSetsA, &accountSetsB)
+	for accountID, resolutionErr := range resolutionErrors {
+		fmt.Fprintf(os.Stderr, handleResolutionErrorFormat, accountID, resolutionErr)
 	}
 
 	comparison := matrix.BuildComparison(accountSetsA, accountSetsB, ownerA, ownerB)
