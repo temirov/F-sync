@@ -3,7 +3,6 @@ package matrix
 import (
 	"context"
 	"errors"
-	"strings"
 
 	"github.com/f-sync/fsync/internal/handles"
 )
@@ -22,9 +21,9 @@ type accountResolutionTarget struct {
 	records map[string]AccountRecord
 }
 
-// MaybeResolveHandles enriches account sets with resolved handles when enabled.
-func MaybeResolveHandles(ctx context.Context, resolver AccountHandleResolver, shouldResolve bool, accountSets ...*AccountSets) map[string]error {
-	if !shouldResolve || resolver == nil {
+// ResolveHandles enriches account sets with resolved handles whenever a resolver is provided.
+func ResolveHandles(ctx context.Context, resolver AccountHandleResolver, accountSets ...*AccountSets) map[string]error {
+	if resolver == nil {
 		return nil
 	}
 
@@ -59,12 +58,8 @@ func MaybeResolveHandles(ctx context.Context, resolver AccountHandleResolver, sh
 		}
 		for _, target := range accountIDTargets[accountID] {
 			record := target.records[accountID]
-			if record.UserName == "" {
-				record.UserName = result.Record.UserName
-			}
-			if record.DisplayName == "" {
-				record.DisplayName = result.Record.DisplayName
-			}
+			record.UserName = result.Record.UserName
+			record.DisplayName = result.Record.DisplayName
 			target.records[accountID] = record
 		}
 	}
@@ -75,10 +70,7 @@ func MaybeResolveHandles(ctx context.Context, resolver AccountHandleResolver, sh
 }
 
 func collectResolutionTargets(source map[string]AccountRecord, targets map[string][]accountResolutionTarget) {
-	for accountID, record := range source {
-		if strings.TrimSpace(record.UserName) != "" {
-			continue
-		}
+	for accountID := range source {
 		targets[accountID] = append(targets[accountID], accountResolutionTarget{records: source})
 	}
 }

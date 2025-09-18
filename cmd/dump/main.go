@@ -55,7 +55,7 @@ func main() {
 	if err != nil {
 		dief(handlesResolverErrorFormat, err)
 	}
-	resolutionErrors := matrix.MaybeResolveHandles(context.Background(), resolver, true, &accountSetsA, &accountSetsB)
+	resolutionErrors := matrix.ResolveHandles(context.Background(), resolver, &accountSetsA, &accountSetsB)
 	for accountID, resolutionErr := range resolutionErrors {
 		fmt.Fprintf(os.Stderr, handleResolutionErrorFormat, accountID, resolutionErr)
 	}
