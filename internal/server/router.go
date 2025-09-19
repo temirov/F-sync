@@ -20,6 +20,8 @@ const (
 	comparisonRoutePath             = "/"
 	healthRoutePath                 = "/healthz"
 	uploadsRoutePath                = "/api/uploads"
+	compareStartRoutePath           = "/api/compare"
+	compareProgressRoutePath        = "/api/compare/:taskID"
 	staticRoutePath                 = "/static"
 	htmlContentType                 = "text/html; charset=utf-8"
 	jsonContentType                 = "application/json; charset=utf-8"
@@ -36,14 +38,19 @@ const (
 	errMessageStoreUpdate           = "unable to store uploaded archive"
 	errMessageTooManyArchives       = "two archives already uploaded; reset before adding more"
 	errMessageRenderFailure         = "comparison page rendering failed"
+	errMessageHandleResolverMissing = "handle resolver is not configured"
+	errMessageComparisonUnavailable = "comparison is not ready; upload two archives first"
 	errMessageUploadPersistFailure  = "unable to persist uploaded file"
+	errMessageTaskUnknown           = handleResolutionTaskNotFoundMessage
 	logMessageRenderFailure         = "comparison render failure"
 	logMessageStoreFailure          = "upload store failure"
 	logMessageArchiveParseFailure   = "archive parse failure"
-	logMessageHandleResolution      = "resolving handles"
+	logMessageHandleResolutionStart = "starting handle resolution task"
 	logMessageHandleResolutionError = "handle resolution failure"
 	logFieldArchiveName             = "archive"
 	logFieldAccountID               = "account_id"
+	logFieldTaskID                  = "task_id"
+	logFieldTotalAccounts           = "total_accounts"
 	ginModeRelease                  = "release"
 )
 
@@ -58,6 +65,8 @@ type ComparisonData struct {
 	AccountSetsB matrix.AccountSets
 	OwnerA       matrix.OwnerIdentity
 	OwnerB       matrix.OwnerIdentity
+	FileNameA    string
+	FileNameB    string
 }
 
 // ComparisonService encapsulates the logic required to build and render comparison pages.
@@ -84,7 +93,6 @@ type RouterConfig struct {
 	Service        ComparisonService
 	Store          ComparisonStore
 	Logger         *zap.Logger
-	ResolveHandles bool
 	HandleResolver matrix.AccountHandleResolver
 }
 
@@ -93,7 +101,7 @@ type ComparisonStore interface {
 	Snapshot() ComparisonSnapshot
 	Upsert(upload ArchiveUpload) (ComparisonSnapshot, error)
 	Clear() ComparisonSnapshot
-	ResolveHandles(ctx context.Context, resolver matrix.AccountHandleResolver) map[string]error
+	ApplyResolvedComparison(resolved ComparisonData)
 }
 
 // ComparisonSnapshot represents the current upload state and optional comparison data.
@@ -138,14 +146,16 @@ func NewRouter(configuration RouterConfig) (*gin.Engine, error) {
 		store:          store,
 		service:        service,
 		logger:         logger,
-		resolveHandles: configuration.ResolveHandles,
 		handleResolver: configuration.HandleResolver,
+		taskTracker:    newHandleResolutionTracker(),
 	}
 
 	engine.GET(comparisonRoutePath, handler.serveComparison)
 	engine.GET(healthRoutePath, handler.healthStatus)
 	engine.POST(uploadsRoutePath, handler.uploadArchives)
 	engine.DELETE(uploadsRoutePath, handler.resetArchives)
+	engine.POST(compareStartRoutePath, handler.startComparisonTask)
+	engine.GET(compareProgressRoutePath, handler.comparisonProgress)
 
 	return engine, nil
 }
@@ -154,8 +164,8 @@ type applicationHandler struct {
 	store          ComparisonStore
 	service        ComparisonService
 	logger         *zap.Logger
-	resolveHandles bool
 	handleResolver matrix.AccountHandleResolver
+	taskTracker    *handleResolutionTracker
 }
 
 func (handler applicationHandler) serveComparison(ginContext *gin.Context) {
@@ -234,11 +244,6 @@ func (handler applicationHandler) uploadArchives(ginContext *gin.Context) {
 		}
 	}
 
-	if handler.resolveHandles && handler.handleResolver != nil && snapshot.ComparisonData != nil {
-		handler.logger.Info(logMessageHandleResolution)
-		go handler.resolveHandlesAsync()
-	}
-
 	ginContext.Header("Content-Type", jsonContentType)
 	ginContext.JSON(http.StatusOK, uploadResponse{
 		Uploads:         snapshot.Uploads,
@@ -251,11 +256,96 @@ func (handler applicationHandler) resetArchives(ginContext *gin.Context) {
 	ginContext.Status(http.StatusNoContent)
 }
 
-func (handler applicationHandler) resolveHandlesAsync() {
-	errorsByAccountID := handler.store.ResolveHandles(context.Background(), handler.handleResolver)
-	for accountID, resolutionErr := range errorsByAccountID {
-		handler.logger.Warn(logMessageHandleResolutionError, zap.String(logFieldAccountID, accountID), zap.Error(resolutionErr))
+func (handler applicationHandler) startComparisonTask(ginContext *gin.Context) {
+	if handler.handleResolver == nil {
+		handler.writeJSONError(ginContext, http.StatusBadRequest, errMessageHandleResolverMissing)
+		return
 	}
+
+	snapshot := handler.store.Snapshot()
+	if snapshot.ComparisonData == nil {
+		handler.writeJSONError(ginContext, http.StatusBadRequest, errMessageComparisonUnavailable)
+		return
+	}
+
+	resolutionPlan := matrix.NewHandleResolutionPlan(
+		&snapshot.ComparisonData.AccountSetsA,
+		&snapshot.ComparisonData.AccountSetsB,
+	)
+
+	taskSnapshot := handler.taskTracker.CreateTask(resolutionPlan.TargetCount())
+	handler.logger.Info(
+		logMessageHandleResolutionStart,
+		zap.String(logFieldTaskID, taskSnapshot.Identifier),
+		zap.Int(logFieldTotalAccounts, taskSnapshot.Total),
+	)
+
+	ginContext.Header("Content-Type", jsonContentType)
+	ginContext.JSON(http.StatusAccepted, startComparisonResponse{TaskID: taskSnapshot.Identifier, Total: taskSnapshot.Total})
+
+	if taskSnapshot.Total == 0 {
+		handler.store.ApplyResolvedComparison(*snapshot.ComparisonData)
+		handler.taskTracker.CompleteTask(taskSnapshot.Identifier, false)
+		return
+	}
+
+	go handler.executeHandleResolutionTask(taskSnapshot.Identifier, snapshot.ComparisonData, resolutionPlan)
+}
+
+func (handler applicationHandler) comparisonProgress(ginContext *gin.Context) {
+	taskIdentifier := ginContext.Param("taskID")
+	taskSnapshot, exists := handler.taskTracker.TaskSnapshot(taskIdentifier)
+	if !exists {
+		handler.writeJSONError(ginContext, http.StatusNotFound, errMessageTaskUnknown)
+		return
+	}
+
+	ginContext.Header("Content-Type", jsonContentType)
+	ginContext.JSON(http.StatusOK, comparisonProgressResponse{
+		TaskID:    taskSnapshot.Identifier,
+		Total:     taskSnapshot.Total,
+		Completed: taskSnapshot.Completed,
+		Status:    string(taskSnapshot.Status),
+		Errors:    taskSnapshot.Errors,
+	})
+}
+
+func (handler applicationHandler) executeHandleResolutionTask(taskIdentifier string, comparisonData *ComparisonData, plan matrix.HandleResolutionPlan) {
+	if handler.handleResolver == nil {
+		handler.taskTracker.CompleteTask(taskIdentifier, true)
+		return
+	}
+
+	ctx := context.Background()
+	accountIdentifiers := plan.AccountIDs()
+	taskFailed := false
+	for _, accountIdentifier := range accountIdentifiers {
+		results := handler.handleResolver.ResolveMany(ctx, []string{accountIdentifier})
+		result, exists := results[accountIdentifier]
+		var resolutionErr error
+		if !exists {
+			resolutionErr = matrix.ErrMissingHandleResolution
+		} else if result.Err != nil {
+			resolutionErr = result.Err
+		} else {
+			plan.ApplyResolvedRecord(accountIdentifier, result.Record)
+		}
+		if resolutionErr != nil {
+			taskFailed = true
+			handler.logger.Warn(
+				logMessageHandleResolutionError,
+				zap.String(logFieldTaskID, taskIdentifier),
+				zap.String(logFieldAccountID, accountIdentifier),
+				zap.Error(resolutionErr),
+			)
+		}
+		handler.taskTracker.RecordResolution(taskIdentifier, accountIdentifier, resolutionErr)
+	}
+
+	if comparisonData != nil {
+		handler.store.ApplyResolvedComparison(*comparisonData)
+	}
+	handler.taskTracker.CompleteTask(taskIdentifier, taskFailed)
 }
 
 func (handler applicationHandler) saveUploadedFile(ginContext *gin.Context, fileHeader *multipart.FileHeader) (string, func(), error) {
@@ -288,6 +378,19 @@ type uploadResponse struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
+}
+
+type startComparisonResponse struct {
+	TaskID string `json:"taskID"`
+	Total  int    `json:"total"`
+}
+
+type comparisonProgressResponse struct {
+	TaskID    string            `json:"taskID"`
+	Total     int               `json:"total"`
+	Completed int               `json:"completed"`
+	Status    string            `json:"status"`
+	Errors    map[string]string `json:"errors,omitempty"`
 }
 
 type memoryComparisonStore struct {
@@ -354,29 +457,22 @@ func (store *memoryComparisonStore) Clear() ComparisonSnapshot {
 	return store.snapshotLocked()
 }
 
-func (store *memoryComparisonStore) ResolveHandles(ctx context.Context, resolver matrix.AccountHandleResolver) map[string]error {
-	store.mutex.RLock()
-	if store.primary == nil || store.secondary == nil {
-		store.mutex.RUnlock()
-		return nil
-	}
-	primary := *store.primary
-	secondary := *store.secondary
-	store.mutex.RUnlock()
-
-	accountSetsPrimary := copyAccountSets(primary.accountSets)
-	accountSetsSecondary := copyAccountSets(secondary.accountSets)
-	errorsByAccountID := matrix.MaybeResolveHandles(ctx, resolver, true, &accountSetsPrimary, &accountSetsSecondary)
-
+func (store *memoryComparisonStore) ApplyResolvedComparison(resolved ComparisonData) {
 	store.mutex.Lock()
-	if store.primary != nil && (sameOwner(store.primary.owner, primary.owner) || sameFileForUnknownOwner(*store.primary, primary)) {
-		store.primary.accountSets = accountSetsPrimary
+	defer store.mutex.Unlock()
+
+	if store.primary != nil {
+		resolvedPrimary := archiveRecord{owner: resolved.OwnerA, fileName: resolved.FileNameA}
+		if sameOwner(store.primary.owner, resolved.OwnerA) || sameFileForUnknownOwner(*store.primary, resolvedPrimary) {
+			store.primary.accountSets = copyAccountSets(resolved.AccountSetsA)
+		}
 	}
-	if store.secondary != nil && (sameOwner(store.secondary.owner, secondary.owner) || sameFileForUnknownOwner(*store.secondary, secondary)) {
-		store.secondary.accountSets = accountSetsSecondary
+	if store.secondary != nil {
+		resolvedSecondary := archiveRecord{owner: resolved.OwnerB, fileName: resolved.FileNameB}
+		if sameOwner(store.secondary.owner, resolved.OwnerB) || sameFileForUnknownOwner(*store.secondary, resolvedSecondary) {
+			store.secondary.accountSets = copyAccountSets(resolved.AccountSetsB)
+		}
 	}
-	store.mutex.Unlock()
-	return errorsByAccountID
 }
 
 func (store *memoryComparisonStore) snapshotLocked() ComparisonSnapshot {
@@ -394,6 +490,8 @@ func (store *memoryComparisonStore) snapshotLocked() ComparisonSnapshot {
 			AccountSetsB: copyAccountSets(store.secondary.accountSets),
 			OwnerA:       store.primary.owner,
 			OwnerB:       store.secondary.owner,
+			FileNameA:    store.primary.fileName,
+			FileNameB:    store.secondary.fileName,
 		}
 	}
 	return ComparisonSnapshot{Uploads: uploads, ComparisonData: comparison}
@@ -441,10 +539,12 @@ func ownerSummary(owner matrix.OwnerIdentity) string {
 
 func copyAccountSets(source matrix.AccountSets) matrix.AccountSets {
 	return matrix.AccountSets{
-		Followers: copyAccountRecordMap(source.Followers),
-		Following: copyAccountRecordMap(source.Following),
-		Muted:     copyBoolMap(source.Muted),
-		Blocked:   copyBoolMap(source.Blocked),
+		Followers:      copyAccountRecordMap(source.Followers),
+		Following:      copyAccountRecordMap(source.Following),
+		Muted:          copyBoolMap(source.Muted),
+		Blocked:        copyBoolMap(source.Blocked),
+		MutedRecords:   copyAccountRecordMap(source.MutedRecords),
+		BlockedRecords: copyAccountRecordMap(source.BlockedRecords),
 	}
 }
 

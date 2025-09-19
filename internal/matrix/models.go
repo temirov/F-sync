@@ -6,11 +6,14 @@ import "github.com/f-sync/fsync/internal/handles"
 type AccountRecord = handles.AccountRecord
 
 // AccountSets contains the relationship data discovered for a single owner.
+// MutedRecords and BlockedRecords hold any resolved profile metadata for muted and blocked identifiers.
 type AccountSets struct {
-	Followers map[string]AccountRecord
-	Following map[string]AccountRecord
-	Muted     map[string]bool
-	Blocked   map[string]bool
+	Followers      map[string]AccountRecord
+	Following      map[string]AccountRecord
+	Muted          map[string]bool
+	Blocked        map[string]bool
+	MutedRecords   map[string]AccountRecord
+	BlockedRecords map[string]AccountRecord
 }
 
 // OwnerIdentity describes the owner of a Twitter export archive.

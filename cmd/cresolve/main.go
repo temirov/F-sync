@@ -3,62 +3,51 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
-	"math/rand"
 	"os"
 	"os/exec"
 	"os/signal"
-	"regexp"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/f-sync/fsync/internal/xresolver"
 )
-
-const (
-	defaultChromeBinaryPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-)
-
-var (
-	profileURLRegex = regexp.MustCompile(`https://(?:x|twitter)\.com/[A-Za-z0-9_]{1,15}`)
-
-	reservedTopLevelPaths = map[string]struct{}{
-		"i": {}, "intent": {}, "home": {}, "tos": {}, "privacy": {}, "explore": {},
-		"notifications": {}, "settings": {}, "login": {}, "signup": {}, "share": {},
-		"account": {}, "compose": {}, "messages": {}, "search": {},
-	}
-
-	metaOGTitle  = regexp.MustCompile(`property="og:title"[^>]*content="([^"]+)"`)
-	metaTitleTag = regexp.MustCompile(`<title[^>]*>([^<]+)</title>`)
-
-	uaPool = []string{
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.850.0 Safari/537.36",
-	}
-)
-
-type profileInfo struct {
-	ID          string `json:"id"`
-	Handle      string `json:"handle"`
-	DisplayName string `json:"display_name"`
-	FromURL     string `json:"from_url"`
-	Err         string `json:"error,omitempty"`
-}
 
 func main() {
+	// Output modes
 	flagCSV := flag.Bool("csv", false, "output CSV: id,handle,display_name")
 	flagJSON := flag.Bool("json", false, "output JSON lines")
+
+	// Resolver knobs
 	flagChrome := flag.String("chrome", defaultChromePath(), "path to Chrome/Chromium binary (or set CHROME_BIN)")
 	flagVT := flag.Int("vtbudget", 15000, "Chrome virtual time budget (ms)")
 	flagTimeout := flag.Duration("timeout", 30*time.Second, "per-ID timeout")
-	flagDelay := flag.Duration("delay", 500*time.Millisecond, "fixed delay between requests")
+	flagAttempt := flag.Duration("attempt-timeout", 15*time.Second, "per-attempt timeout (<= per-ID)")
+
+	// Pacing knobs
+	flagDelay := flag.Duration("delay", 500*time.Millisecond, "base delay between requests")
+	flagJitter := flag.Duration("jitter", 0, "jitter applied to delay in [-jitter,+jitter]")
+	flagBurstSize := flag.Int("burst-size", 0, "requests per burst (0 = no bursting)")
+	flagBurstRest := flag.Duration("burst-rest", 0, "rest duration after each burst")
+	flagBurstJitter := flag.Duration("burst-jitter", 0, "jitter for burst rest in [-burst-jitter,+burst-jitter]")
+
+	// Retry knobs
+	flagRetries := flag.Int("retries", 1, "additional attempts per ID (0 = single attempt)")
+	flagRetryMin := flag.Duration("retry-min", 400*time.Millisecond, "minimum backoff between attempts")
+	flagRetryMax := flag.Duration("retry-max", 1500*time.Millisecond, "maximum backoff between attempts")
+
+	// UA rotation
+	flagUAs := flag.String("ua-list", "", "comma-separated UA list to rotate (optional)")
+
+	// Debug
+	flagVerbose := flag.Bool("verbose", false, "verbose timings to stderr")
+
 	flag.Parse()
 
 	chromeBinaryPath := os.Getenv("CHROME_BIN")
@@ -87,173 +76,71 @@ func main() {
 		os.Exit(2)
 	}
 
-	rand.Seed(time.Now().UnixNano())
+	cfg := xresolver.Config{
+		ChromePath:          chromeBinaryPath,
+		VirtualTimeBudgetMS: *flagVT,
+		PerIDTimeout:        *flagTimeout,
+		AttemptTimeout:      *flagAttempt,
 
+		Delay:       *flagDelay,
+		Jitter:      *flagJitter,
+		BurstSize:   *flagBurstSize,
+		BurstRest:   *flagBurstRest,
+		BurstJitter: *flagBurstJitter,
+
+		Retries:  *flagRetries,
+		RetryMin: *flagRetryMin,
+		RetryMax: *flagRetryMax,
+
+		UserAgents: splitCSV(*flagUAs),
+	}
+	if *flagVerbose {
+		cfg.Logf = func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "[%s] ", time.Now().Format("15:04:05.000"))
+			fmt.Fprintf(os.Stderr, format, args...)
+			fmt.Fprintln(os.Stderr)
+		}
+	}
+
+	// Construct service with a Chrome renderer.
+	svc := xresolver.NewService(cfg, xresolver.NewChromeRenderer())
+
+	// Cancel on SIGINT/SIGTERM
 	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// CSV writer if needed — write header ONCE
-	var csvWriter *csv.Writer
-	if *flagCSV {
-		csvWriter = csv.NewWriter(os.Stdout)
-		_ = csvWriter.Write([]string{"id", "handle", "display_name"})
-		csvWriter.Flush()
-	}
+	// Call the service
+	res := svc.ResolveBatch(rootCtx, xresolver.Request{IDs: ids})
 
-	for _, id := range ids {
-		select {
-		case <-rootCtx.Done():
-			return
-		default:
+	// Presentation (CLI only)
+	switch {
+	case *flagJSON:
+		enc := json.NewEncoder(os.Stdout)
+		for _, p := range res {
+			_ = enc.Encode(p)
 		}
-
-		perIDCtx, perCancel := context.WithTimeout(rootCtx, *flagTimeout)
-		info := resolveOne(perIDCtx, chromeBinaryPath, *flagVT, id)
-		perCancel()
-
-		switch {
-		case *flagJSON:
-			enc := json.NewEncoder(os.Stdout)
-			_ = enc.Encode(info)
-		case *flagCSV:
-			_ = csvWriter.Write([]string{info.ID, info.Handle, info.DisplayName})
-			csvWriter.Flush()
-		default:
-			if info.Handle != "" {
-				fmt.Printf("%s: %s (retrieved from %s)\n", info.ID, info.Handle, info.FromURL)
-				if info.DisplayName != "" {
-					fmt.Printf("  name: %s\n", info.DisplayName)
+	case *flagCSV:
+		w := csv.NewWriter(os.Stdout)
+		_ = w.Write([]string{"id", "handle", "display_name"})
+		for _, p := range res {
+			_ = w.Write([]string{p.ID, p.Handle, p.DisplayName})
+		}
+		w.Flush()
+	default:
+		for _, p := range res {
+			if p.Handle != "" {
+				fmt.Printf("%s: %s (retrieved from %s)\n", p.ID, p.Handle, p.FromURL)
+				if p.DisplayName != "" {
+					fmt.Printf("  name: %s\n", p.DisplayName)
 				}
 			} else {
-				fmt.Printf("%s:\n", info.ID)
-				if info.Err != "" {
-					fmt.Printf("  err:  %s\n", info.Err)
+				fmt.Printf("%s:\n", p.ID)
+				if p.Err != "" {
+					fmt.Printf("  err:  %s\n", p.Err)
 				}
 			}
 		}
-
-		select {
-		case <-time.After(*flagDelay):
-		case <-rootCtx.Done():
-			return
-		}
 	}
-}
-
-func resolveOne(ctx context.Context, chromeBinaryPath string, vtBudgetMS int, id string) profileInfo {
-	intentURL := "https://x.com/intent/user?user_id=" + id
-	userAgent := uaPool[rand.Intn(len(uaPool))]
-
-	htmlDoc, err := renderWithHeadlessChrome(ctx, chromeBinaryPath, userAgent, vtBudgetMS, intentURL)
-	if err != nil || strings.TrimSpace(htmlDoc) == "" {
-		msg := ""
-		if err != nil {
-			msg = err.Error()
-		}
-		return profileInfo{ID: id, FromURL: intentURL, Err: msg}
-	}
-
-	normalized := strings.ReplaceAll(htmlDoc, `'`, `"`)
-	handle := extractHandle(normalized)
-	display := extractDisplayName(normalized, handle)
-
-	return profileInfo{
-		ID:          id,
-		Handle:      handle,
-		DisplayName: display,
-		FromURL:     intentURL,
-	}
-}
-
-func renderWithHeadlessChrome(ctx context.Context, chromeBinaryPath, userAgent string, vtBudgetMS int, targetPageURL string) (string, error) {
-	args := []string{
-		"--headless=new",
-		"--disable-gpu",
-		"--use-gl=swiftshader",
-		"--enable-unsafe-swiftshader",
-		"--hide-scrollbars",
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--log-level=3",
-		"--silent",
-		"--disable-logging",
-		"--user-agent=" + userAgent,
-		fmt.Sprintf("--virtual-time-budget=%d", vtBudgetMS),
-		"--dump-dom",
-		targetPageURL,
-	}
-	cmd := exec.CommandContext(ctx, chromeBinaryPath, args...)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = io.Discard
-
-	if err := cmd.Start(); err != nil {
-		return "", err
-	}
-
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
-
-	select {
-	case <-ctx.Done():
-		_ = cmd.Process.Kill()
-		<-waitCh
-		return "", ctx.Err()
-	case err := <-waitCh:
-		if err != nil {
-			return "", err
-		}
-		return stdout.String(), nil
-	}
-}
-
-func extractHandle(htmlDoc string) string {
-	for _, full := range profileURLRegex.FindAllString(htmlDoc, -1) {
-		h := stripDomainPrefix(full)
-		if !isReserved(h) {
-			return h
-		}
-	}
-	return ""
-}
-
-func extractDisplayName(htmlDoc string, handle string) string {
-	title := firstGroup(metaOGTitle.FindStringSubmatch(htmlDoc))
-	if title == "" {
-		title = firstGroup(metaTitleTag.FindStringSubmatch(htmlDoc))
-	}
-	if title == "" {
-		return ""
-	}
-	if idx := strings.Index(title, "(@"); idx > 0 {
-		return strings.TrimSpace(title[:idx])
-	}
-	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(title, " / X"), " on X"))
-	if handle != "" {
-		name = strings.ReplaceAll(name, "(@"+handle+")", "")
-		name = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(name, " / X"), " on X"))
-	}
-	return strings.TrimSpace(name)
-}
-
-func stripDomainPrefix(fullURL string) string {
-	fullURL = strings.TrimPrefix(fullURL, "https://")
-	if i := strings.IndexByte(fullURL, '/'); i >= 0 {
-		return fullURL[i+1:]
-	}
-	return fullURL
-}
-
-func isReserved(handle string) bool {
-	_, bad := reservedTopLevelPaths[strings.ToLower(handle)]
-	return bad
-}
-
-func firstGroup(m []string) string {
-	if len(m) >= 2 {
-		return m[1]
-	}
-	return ""
 }
 
 func collectIDs(args []string) []string {
@@ -266,9 +153,74 @@ func collectIDs(args []string) []string {
 	return out
 }
 
+// defaultChromePath detects a sensible Chrome/Chromium path per-OS.
+// Priority: CHROME_BIN (handled earlier), then common locations & PATH.
 func defaultChromePath() string {
-	if v := os.Getenv("CHROME_BIN"); v != "" {
-		return v
+	// If CHROME_BIN is set, the caller will use it (handled in main).
+	// Here we try platform defaults and PATH lookups.
+	switch runtime.GOOS {
+	case "darwin":
+		// Standard macOS app bundle path
+		return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	case "windows":
+		// Try PATH first
+		if p, err := exec.LookPath("chrome.exe"); err == nil {
+			return p
+		}
+		// Common install paths (best-effort; user can override with --chrome)
+		candidates := []string{
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		}
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
+		// Fallback: let it be empty; user must supply --chrome
+		return "chrome.exe"
+	default: // "linux" and others
+		// Try common binary names in PATH
+		names := []string{
+			"google-chrome-stable",
+			"google-chrome",
+			"chromium",
+			"chromium-browser",
+			"chrome",
+		}
+		for _, n := range names {
+			if p, err := exec.LookPath(n); err == nil {
+				return p
+			}
+		}
+		// Try a few absolute paths often used by packages/snap
+		candidates := []string{
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/google-chrome",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+			"/snap/bin/chromium",
+		}
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
+		// Last resort: user must provide --chrome or CHROME_BIN
+		return "google-chrome"
 	}
-	return defaultChromeBinaryPath
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
+		return nil
+	}
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
 }

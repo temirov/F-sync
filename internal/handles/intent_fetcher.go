@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math/rand"
 	"os"
 	"os/exec"
 	"strings"
@@ -14,7 +15,6 @@ import (
 
 const (
 	chromeBinaryEnvironmentVariable      = "CHROME_BIN"
-	defaultChromeUserAgent               = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36"
 	chromeUserAgentFlagFormat            = "--user-agent=%s"
 	chromeVirtualTimeBudgetFlagFormat    = "--virtual-time-budget=%d"
 	chromeDumpDOMFlag                    = "--dump-dom"
@@ -113,7 +113,8 @@ func NewChromeIntentFetcher(configuration ChromeFetcherConfig) (*ChromeIntentFet
 
 	userAgent := strings.TrimSpace(configuration.UserAgent)
 	if userAgent == "" {
-		userAgent = defaultChromeUserAgent
+		randomGenerator := rand.New(rand.NewSource(time.Now().UnixNano()))
+		userAgent = DefaultChromeUserAgent(randomGenerator)
 	}
 
 	virtualTimeBudget := configuration.VirtualTimeBudget

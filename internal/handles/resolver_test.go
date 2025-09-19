@@ -2,15 +2,10 @@ package handles_test
 
 import (
 	"context"
-	"errors"
-	"flag"
 	"fmt"
-	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/f-sync/fsync/internal/handles"
 )
@@ -30,27 +25,6 @@ const (
 	resolverTestAccountIDSecondaryDedup    = "20002"
 	resolverTestAccountIDCacheReuse        = "20003"
 	resolverTestAccountIDSharedAcrossCache = "20004"
-
-	resolverIntegrationFlagName                 = "twitter_integration"
-	resolverIntegrationFlagDescription          = "enable live Twitter intent resolution integration test"
-	resolverIntegrationFlagDisabledMessage      = "twitter integration test skipped because the flag is disabled"
-	resolverIntegrationChromeUnavailableMessage = "twitter integration test skipped because no Chrome binary is available"
-	resolverIntegrationTestCaseNameElon         = "elon musk intent resolution"
-	resolverIntegrationAccountIDElon            = "44196397"
-	resolverIntegrationExpectedUserNameElon     = "elonmusk"
-	resolverIntegrationCreateResolverError      = "create integration resolver"
-	resolverIntegrationResolveErrorFormat       = "integration resolver returned error: %v"
-	resolverIntegrationUnexpectedHandleFormat   = "expected integration handle %s, got %s"
-	resolverIntegrationEmptyDisplayNameMessage  = "expected integration display name to be non-empty"
-	resolverIntegrationSkipMessageFormat        = "%s: %v"
-	resolverIntegrationErrMessageEmptyChrome    = "resolved empty chrome binary path"
-	resolverIntegrationContextTimeoutSeconds    = 30
-)
-
-var (
-	resolverIntegrationRunFlag = flag.Bool(resolverIntegrationFlagName, false, resolverIntegrationFlagDescription)
-
-	resolverIntegrationRequestTimeout = time.Duration(resolverIntegrationContextTimeoutSeconds) * time.Second
 )
 
 type recordingIntentFetcher struct {
@@ -66,25 +40,6 @@ func newRecordingIntentFetcher(responses map[string]handles.IntentPage, errors m
 		errors:    errors,
 		calls:     make(map[string]int),
 	}
-}
-
-func resolverIntegrationChromeBinaryPath() (string, error) {
-	resolvedPath := handles.ResolveChromeBinaryPath(handles.Config{})
-	trimmedPath := strings.TrimSpace(resolvedPath)
-	if trimmedPath == "" {
-		return "", errors.New(resolverIntegrationErrMessageEmptyChrome)
-	}
-	if strings.ContainsRune(trimmedPath, os.PathSeparator) {
-		if _, statErr := os.Stat(trimmedPath); statErr != nil {
-			return "", statErr
-		}
-		return trimmedPath, nil
-	}
-	lookedPath, lookErr := exec.LookPath(trimmedPath)
-	if lookErr != nil {
-		return "", lookErr
-	}
-	return lookedPath, nil
 }
 
 func (fetcher *recordingIntentFetcher) FetchIntentPage(ctx context.Context, request handles.IntentRequest) (handles.IntentPage, error) {
@@ -288,56 +243,6 @@ func TestResolverSharesCacheAcrossInstances(t *testing.T) {
 			}
 			if secondRecord.DisplayName != firstRecord.DisplayName {
 				t.Fatalf("expected cached display name %s, got %s", firstRecord.DisplayName, secondRecord.DisplayName)
-			}
-		})
-	}
-}
-
-func TestResolverIntegrationResolveElonMusk(t *testing.T) {
-	if !*resolverIntegrationRunFlag {
-		t.Skip(resolverIntegrationFlagDisabledMessage)
-	}
-
-	chromeBinaryPath, chromeErr := resolverIntegrationChromeBinaryPath()
-	if chromeErr != nil {
-		t.Skipf(resolverIntegrationSkipMessageFormat, resolverIntegrationChromeUnavailableMessage, chromeErr)
-	}
-
-	resolver, err := handles.NewResolver(handles.Config{ChromeBinaryPath: chromeBinaryPath})
-	if err != nil {
-		t.Fatalf(resolverIntegrationSkipMessageFormat, resolverIntegrationCreateResolverError, err)
-	}
-
-	testCases := []struct {
-		name             string
-		accountID        string
-		expectedUserName string
-	}{
-		{
-			name:             resolverIntegrationTestCaseNameElon,
-			accountID:        resolverIntegrationAccountIDElon,
-			expectedUserName: resolverIntegrationExpectedUserNameElon,
-		},
-	}
-
-	for _, testCase := range testCases {
-		testCase := testCase
-		t.Run(testCase.name, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), resolverIntegrationRequestTimeout)
-			defer cancel()
-
-			record, resolveErr := resolver.ResolveAccount(ctx, testCase.accountID)
-			if resolveErr != nil {
-				if errors.Is(resolveErr, exec.ErrNotFound) {
-					t.Skipf(resolverIntegrationSkipMessageFormat, resolverIntegrationChromeUnavailableMessage, resolveErr)
-				}
-				t.Fatalf(resolverIntegrationResolveErrorFormat, resolveErr)
-			}
-			if record.UserName != testCase.expectedUserName {
-				t.Fatalf(resolverIntegrationUnexpectedHandleFormat, testCase.expectedUserName, record.UserName)
-			}
-			if strings.TrimSpace(record.DisplayName) == "" {
-				t.Fatalf(resolverIntegrationEmptyDisplayNameMessage)
 			}
 		})
 	}

@@ -14,13 +14,24 @@
     const ID_COMPARISON_OPERATION = "cmpOp";
     const ID_COMPARISON_OUTPUT = "cmpOut";
     const ID_COMPARISON_BUTTON = "runCmp";
+    const ID_COMPARISON_PROGRESS = "comparisonProgress";
+    const ID_COMPARISON_PROGRESS_BAR = "comparisonProgressBar";
+    const ID_COMPARISON_PROGRESS_TEXT = "comparisonProgressText";
 
     const ROUTE_UPLOADS = "/api/uploads";
+    const ROUTE_COMPARE = "/api/compare";
+    const ROUTE_COMPARE_PROGRESS = "/api/compare/";
     const HTTP_METHOD_POST = "POST";
     const HTTP_METHOD_DELETE = "DELETE";
+    const HTTP_METHOD_GET = "GET";
     const JSON_KEY_UPLOADS = "uploads";
     const JSON_KEY_ERROR = "error";
     const JSON_KEY_COMPARISON_READY = "comparisonReady";
+    const JSON_KEY_TASK_ID = "taskID";
+    const JSON_KEY_TOTAL = "total";
+    const JSON_KEY_COMPLETED = "completed";
+    const JSON_KEY_STATUS = "status";
+    const JSON_KEY_ERRORS = "errors";
 
     const CLASS_DROPZONE_ACTIVE = "is-dragover";
     const CLASS_SECTION_TOGGLE = "section-toggle";
@@ -36,6 +47,8 @@
 
     const TEXT_UPLOAD_GENERIC_ERROR = "Upload failed. Please verify the file format.";
     const TEXT_RESET_GENERIC_ERROR = "Reset failed. Please try again.";
+    const TEXT_COMPARE_GENERIC_ERROR = "Unable to start comparison. Please try again.";
+    const TEXT_PROGRESS_GENERIC_ERROR = "Unable to retrieve comparison progress. Please try again.";
     const TEXT_UPLOAD_PLACEHOLDER = "No archives uploaded yet.";
     const TEXT_UNKNOWN = "Unknown";
     const TEXT_HANDLE_PREFIX = "@";
@@ -45,11 +58,18 @@
     const TEXT_NONE = "None";
     const TEXT_HIDE = "Hide";
     const TEXT_SHOW = "Show";
+    const TEXT_PROGRESS_PREFIX = "Resolved";
+    const TEXT_PROGRESS_SEPARATOR = "of";
+    const TEXT_HANDLES = "handles";
+    const TEXT_PROGRESS_WAIT = "Preparing comparison";
+    const TASK_STATUS_COMPLETED = "completed";
+    const TASK_STATUS_FAILED = "failed";
+    const PROGRESS_POLL_INTERVAL_MS = 1000;
 
     const PROFILE_BASE_URL = "https://twitter.com/";
-    const PROFILE_ID_BASE_URL = "https://twitter.com/i/user/";
     const FOLLOW_SCREEN_NAME_URL = "https://twitter.com/intent/follow?screen_name=";
-    const FOLLOW_ACCOUNT_ID_URL = "https://twitter.com/intent/user?user_id=";
+
+    let activeProgressPollHandle = null;
 
     initializeUploadUI();
     initializeMatrixFeatures();
@@ -64,13 +84,21 @@
         const placeholderElement = document.getElementById(ID_UPLOADS_PLACEHOLDER);
         const alertContainerElement = document.getElementById(ID_UPLOAD_ALERTS);
         const resetButtonElement = document.getElementById(ID_RESET_BUTTON);
+        const progressContainerElement = document.getElementById(ID_COMPARISON_PROGRESS);
+        const progressBarElement = document.getElementById(ID_COMPARISON_PROGRESS_BAR);
+        const progressTextElement = document.getElementById(ID_COMPARISON_PROGRESS_TEXT);
 
-        if (!fileInputElement || !dropzoneElement || !browseButtonElement || !compareButtonElement || !comparisonPanelElement || !uploadsListElement || !alertContainerElement) {
+        if (!fileInputElement || !dropzoneElement || !browseButtonElement || !compareButtonElement || !comparisonPanelElement || !uploadsListElement || !alertContainerElement || !progressContainerElement || !progressBarElement || !progressTextElement) {
             return;
         }
 
         const hasComparison = comparisonPanelElement.dataset.hasComparison === VALUE_TRUE;
         updateCompareButton(compareButtonElement, hasComparison);
+        resetProgressUI({
+            progressContainerElement,
+            progressBarElement,
+            progressTextElement,
+        });
 
         browseButtonElement.addEventListener("click", () => fileInputElement.click());
 
@@ -82,6 +110,9 @@
                     uploadsListElement,
                     placeholderElement,
                     alertContainerElement,
+                    progressContainerElement,
+                    progressBarElement,
+                    progressTextElement,
                 });
                 fileInputElement.value = "";
             }
@@ -106,12 +137,21 @@
                     uploadsListElement,
                     placeholderElement,
                     alertContainerElement,
+                    progressContainerElement,
+                    progressBarElement,
+                    progressTextElement,
                 });
             }
         });
 
         compareButtonElement.addEventListener("click", () => {
-            window.location.reload();
+            startComparisonTask({
+                compareButtonElement,
+                alertContainerElement,
+                progressContainerElement,
+                progressBarElement,
+                progressTextElement,
+            });
         });
 
         if (resetButtonElement) {
@@ -121,6 +161,9 @@
                     uploadsListElement,
                     placeholderElement,
                     alertContainerElement,
+                    progressContainerElement,
+                    progressBarElement,
+                    progressTextElement,
                 });
             });
         }
@@ -138,6 +181,7 @@
         }
 
         setAlertMessage(options.alertContainerElement, "", false);
+        resetProgressUI(options);
 
         fetch(ROUTE_UPLOADS, {
             method: HTTP_METHOD_POST,
@@ -171,9 +215,148 @@
             renderUploadsList([], options.uploadsListElement, options.placeholderElement);
             updateCompareButton(options.compareButtonElement, false);
             setAlertMessage(options.alertContainerElement, "", false);
+            resetProgressUI(options);
         }).catch(error => {
             setAlertMessage(options.alertContainerElement, error.message || TEXT_RESET_GENERIC_ERROR, true);
         });
+    }
+
+    function startComparisonTask(options) {
+        if (!options || !options.compareButtonElement) {
+            return;
+        }
+        stopActiveProgressPoll();
+        setAlertMessage(options.alertContainerElement, "", false);
+        options.compareButtonElement.setAttribute("disabled", VALUE_TRUE);
+        showProgressUI({
+            progressContainerElement: options.progressContainerElement,
+            progressBarElement: options.progressBarElement,
+            progressTextElement: options.progressTextElement,
+        }, 0, 0, true);
+
+        fetch(ROUTE_COMPARE, {
+            method: HTTP_METHOD_POST,
+        }).then(response => {
+            if (!response.ok) {
+                return response.json().catch(() => ({})).then(body => {
+                    throw new Error(body[JSON_KEY_ERROR] || TEXT_COMPARE_GENERIC_ERROR);
+                });
+            }
+            return response.json();
+        }).then(body => {
+            const taskIdentifier = typeof body[JSON_KEY_TASK_ID] === "string" ? body[JSON_KEY_TASK_ID] : "";
+            const totalCount = Number(body[JSON_KEY_TOTAL] || 0);
+            if (!taskIdentifier) {
+                throw new Error(TEXT_COMPARE_GENERIC_ERROR);
+            }
+            if (totalCount === 0) {
+                window.location.reload();
+                return;
+            }
+            monitorComparisonTask(taskIdentifier, totalCount, options);
+        }).catch(error => {
+            resetProgressUI(options);
+            setAlertMessage(options.alertContainerElement, error.message || TEXT_COMPARE_GENERIC_ERROR, true);
+            updateCompareButton(options.compareButtonElement, true);
+        });
+    }
+
+    function monitorComparisonTask(taskIdentifier, totalCount, options) {
+        showProgressUI(options, 0, totalCount, false);
+
+        const pollProgress = () => {
+            fetch(`${ROUTE_COMPARE_PROGRESS}${encodeURIComponent(taskIdentifier)}`, {
+                method: HTTP_METHOD_GET,
+            }).then(response => {
+                if (!response.ok) {
+                    return response.json().catch(() => ({})).then(body => {
+                        throw new Error(body[JSON_KEY_ERROR] || TEXT_PROGRESS_GENERIC_ERROR);
+                    });
+                }
+                return response.json();
+            }).then(body => {
+                const completedCount = Number(body[JSON_KEY_COMPLETED] || 0);
+                const statusValue = typeof body[JSON_KEY_STATUS] === "string" ? body[JSON_KEY_STATUS] : "";
+                showProgressUI(options, completedCount, totalCount, false);
+                if (statusValue === TASK_STATUS_COMPLETED) {
+                    stopActiveProgressPoll();
+                    window.location.reload();
+                    return;
+                }
+                if (statusValue === TASK_STATUS_FAILED) {
+                    stopActiveProgressPoll();
+                    handleComparisonFailure(body[JSON_KEY_ERRORS], options);
+                    return;
+                }
+                activeProgressPollHandle = window.setTimeout(pollProgress, PROGRESS_POLL_INTERVAL_MS);
+            }).catch(error => {
+                stopActiveProgressPoll();
+                setAlertMessage(options.alertContainerElement, error.message || TEXT_PROGRESS_GENERIC_ERROR, true);
+                resetProgressUI(options);
+                updateCompareButton(options.compareButtonElement, true);
+            });
+        };
+
+        pollProgress();
+    }
+
+    function handleComparisonFailure(errorDetails, options) {
+        let message = TEXT_COMPARE_GENERIC_ERROR;
+        if (errorDetails && typeof errorDetails === "object") {
+            const formatted = [];
+            Object.keys(errorDetails).forEach(accountIdentifier => {
+                const detail = errorDetails[accountIdentifier];
+                if (typeof detail === "string" && detail.trim() !== "") {
+                    formatted.push(`${accountIdentifier}: ${detail}`);
+                }
+            });
+            if (formatted.length > 0) {
+                message = formatted.join("; ");
+            }
+        }
+        setAlertMessage(options.alertContainerElement, message, true);
+        resetProgressUI(options);
+        updateCompareButton(options.compareButtonElement, true);
+    }
+
+    function stopActiveProgressPoll() {
+        if (activeProgressPollHandle !== null) {
+            window.clearTimeout(activeProgressPollHandle);
+            activeProgressPollHandle = null;
+        }
+    }
+
+    function resetProgressUI(options) {
+        stopActiveProgressPoll();
+        if (!options || !options.progressContainerElement || !options.progressBarElement || !options.progressTextElement) {
+            return;
+        }
+        options.progressContainerElement.classList.add(CLASS_HIDDEN);
+        options.progressBarElement.style.width = "0%";
+        options.progressBarElement.textContent = "0%";
+        options.progressBarElement.setAttribute("aria-valuenow", "0");
+        options.progressTextElement.textContent = "";
+    }
+
+    function showProgressUI(options, completedCount, totalCount, isPending) {
+        if (!options || !options.progressContainerElement || !options.progressBarElement || !options.progressTextElement) {
+            return;
+        }
+        options.progressContainerElement.classList.remove(CLASS_HIDDEN);
+        if (isPending) {
+            options.progressBarElement.style.width = "0%";
+            options.progressBarElement.textContent = "0%";
+            options.progressBarElement.setAttribute("aria-valuenow", "0");
+            options.progressTextElement.textContent = TEXT_PROGRESS_WAIT;
+            return;
+        }
+        const boundedTotal = totalCount > 0 ? totalCount : 0;
+        const boundedCompleted = Math.min(Math.max(completedCount, 0), boundedTotal);
+        const percentage = boundedTotal === 0 ? 100 : Math.round((boundedCompleted / boundedTotal) * 100);
+        options.progressBarElement.style.width = `${percentage}%`;
+        options.progressBarElement.textContent = `${percentage}%`;
+        options.progressBarElement.setAttribute("aria-valuenow", String(percentage));
+        options.progressTextElement.textContent = `${TEXT_PROGRESS_PREFIX} ${boundedCompleted} ${TEXT_PROGRESS_SEPARATOR} ${boundedTotal} ${TEXT_HANDLES}`;
     }
 
     function renderUploadsList(uploads, listElement, placeholderElement) {
@@ -442,9 +625,20 @@
     }
 
     function renderAccountRecord(record, metaSources, includeFollowAction) {
-        const profileURL = record.UserName ? `${PROFILE_BASE_URL}${record.UserName}` : `${PROFILE_ID_BASE_URL}${record.AccountID}`;
-        const displayText = record.DisplayName?.trim() || record.UserName?.trim() || record.AccountID || TEXT_UNKNOWN;
-        const handleText = record.UserName ? `${TEXT_HANDLE_PREFIX}${record.UserName}` : "";
+        const trimmedDisplayName = (record.DisplayName || "").trim();
+        const trimmedHandle = (record.UserName || "").trim();
+        const hasDisplayName = trimmedDisplayName !== "";
+        const hasHandle = trimmedHandle !== "";
+        const formattedHandle = hasHandle ? `${TEXT_HANDLE_PREFIX}${trimmedHandle}` : "";
+        let displayText = TEXT_UNKNOWN;
+        if (hasDisplayName && hasHandle) {
+            displayText = `${trimmedDisplayName} (${formattedHandle})`;
+        } else if (hasDisplayName) {
+            displayText = trimmedDisplayName;
+        } else if (hasHandle) {
+            displayText = formattedHandle;
+        }
+        const profileURL = hasHandle ? `${PROFILE_BASE_URL}${trimmedHandle}` : "";
         const badges = [];
         if (metaSources.some(source => source.isMuted(record.AccountID))) {
             badges.push(`<span class="badge text-bg-warning me-2">${TEXT_MUTED}</span>`);
@@ -452,15 +646,17 @@
         if (metaSources.some(source => source.isBlocked(record.AccountID))) {
             badges.push(`<span class="badge text-bg-danger">${TEXT_BLOCKED}</span>`);
         }
-        if (includeFollowAction) {
-            const intentURL = record.UserName
-                ? `${FOLLOW_SCREEN_NAME_URL}${encodeURIComponent(record.UserName)}`
-                : `${FOLLOW_ACCOUNT_ID_URL}${encodeURIComponent(record.AccountID)}`;
+        if (includeFollowAction && hasHandle) {
+            const intentURL = `${FOLLOW_SCREEN_NAME_URL}${encodeURIComponent(trimmedHandle)}`;
             badges.push(`<a class="btn btn-sm btn-outline-primary ms-2" target="_blank" rel="noopener" href="${intentURL}">${TEXT_FOLLOW_BUTTON}</a>`);
         }
         const badgeHTML = badges.length ? `<div class="mt-2">${badges.join(" ")}</div>` : "";
-        const handleHTML = handleText ? `<span class="text-muted small">${escapeHTML(handleText)}</span>` : "";
-        return `<li class="mb-3 pb-3 border-bottom"><a class="text-decoration-none" target="_blank" rel="noopener" href="${profileURL}"><strong class="d-block">${escapeHTML(displayText)}</strong></a>${handleHTML}${badgeHTML}</li>`;
+        const handleHTML = hasHandle && hasDisplayName ? `<span class="text-muted small">${escapeHTML(formattedHandle)}</span>` : "";
+        const strongNameHTML = `<strong class="d-block">${escapeHTML(displayText)}</strong>`;
+        const nameHTML = profileURL
+            ? `<a class="text-decoration-none" target="_blank" rel="noopener" href="${profileURL}">${strongNameHTML}</a>`
+            : strongNameHTML;
+        return `<li class="mb-3 pb-3 border-bottom">${nameHTML}${handleHTML}${badgeHTML}</li>`;
     }
 
     function escapeHTML(input) {

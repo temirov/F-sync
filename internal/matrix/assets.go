@@ -6,7 +6,6 @@ import (
 	"html/template"
 	"io/fs"
 	"sort"
-	"strings"
 )
 
 //go:embed web/static/* web/templates/*
@@ -19,7 +18,6 @@ const (
 	embeddedBaseCSSPath    = "web/static/base.css"
 	embeddedAppJSPath      = "web/static/app.js"
 	twitterUserNameBaseURL = "https://twitter.com/"
-	twitterUserIDBaseURL   = "https://twitter.com/i/user/"
 	accountHandlePrefix    = "@"
 	displayHandleFormat    = "%s (%s%s)"
 	pageTitleText          = "Twitter Relationship Matrix"
@@ -46,20 +44,7 @@ func parseTemplates(fileSystem fs.FS, files ...string) (*template.Template, erro
 			return newAccountPresentation(record).ProfileURL()
 		},
 		"label": func(record AccountRecord) string {
-			display := strings.TrimSpace(record.DisplayName)
-			handle := strings.TrimSpace(record.UserName)
-			switch {
-			case display != "" && handle != "":
-				return fmt.Sprintf(displayHandleFormat, display, accountHandlePrefix, handle)
-			case display != "":
-				return display
-			case handle != "":
-				return accountHandlePrefix + handle
-			case record.AccountID != "":
-				return record.AccountID
-			default:
-				return unknownLabelText
-			}
+			return resolveIdentityLabel(record.DisplayName, record.UserName)
 		},
 		"has": func(flags map[string]bool, accountID string) bool { return flags[accountID] },
 	})
@@ -80,18 +65,5 @@ func mapKeys(flags map[string]bool) []string {
 }
 
 func ownerPretty(identity OwnerIdentity) string {
-	display := strings.TrimSpace(identity.DisplayName)
-	handle := strings.TrimSpace(identity.UserName)
-	switch {
-	case display != "" && handle != "":
-		return fmt.Sprintf(displayHandleFormat, display, accountHandlePrefix, handle)
-	case display != "":
-		return display
-	case handle != "":
-		return accountHandlePrefix + handle
-	case identity.AccountID != "":
-		return identity.AccountID
-	default:
-		return unknownLabelText
-	}
+	return resolveIdentityLabel(identity.DisplayName, identity.UserName)
 }
