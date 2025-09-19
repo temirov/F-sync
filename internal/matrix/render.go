@@ -97,33 +97,19 @@ func newAccountPresentation(record AccountRecord) accountPresentation {
 }
 
 func (presentation accountPresentation) Display() string {
-	display := strings.TrimSpace(presentation.record.DisplayName)
-	if display != "" {
-		return display
-	}
-	handle := strings.TrimSpace(presentation.record.UserName)
-	if handle != "" {
-		return accountHandlePrefix + handle
-	}
-	if presentation.record.AccountID != "" {
-		return presentation.record.AccountID
-	}
-	return unknownLabelText
+	return resolveIdentityLabel(presentation.record.DisplayName, presentation.record.UserName)
 }
 
 func (presentation accountPresentation) Handle() string {
-	handle := strings.TrimSpace(presentation.record.UserName)
-	if handle == "" {
-		return ""
-	}
-	return accountHandlePrefix + handle
+	return resolveHandleLabel(presentation.record.UserName)
 }
 
 func (presentation accountPresentation) ProfileURL() string {
-	if strings.TrimSpace(presentation.record.UserName) != "" {
-		return twitterUserNameBaseURL + presentation.record.UserName
+	trimmedHandle := strings.TrimSpace(presentation.record.UserName)
+	if trimmedHandle == "" {
+		return ""
 	}
-	return twitterUserIDBaseURL + presentation.record.AccountID
+	return twitterUserNameBaseURL + trimmedHandle
 }
 
 type accountBadgeDecorator struct {

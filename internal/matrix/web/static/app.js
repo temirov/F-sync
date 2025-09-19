@@ -47,9 +47,7 @@
     const TEXT_SHOW = "Show";
 
     const PROFILE_BASE_URL = "https://twitter.com/";
-    const PROFILE_ID_BASE_URL = "https://twitter.com/i/user/";
     const FOLLOW_SCREEN_NAME_URL = "https://twitter.com/intent/follow?screen_name=";
-    const FOLLOW_ACCOUNT_ID_URL = "https://twitter.com/intent/user?user_id=";
 
     initializeUploadUI();
     initializeMatrixFeatures();
@@ -442,9 +440,20 @@
     }
 
     function renderAccountRecord(record, metaSources, includeFollowAction) {
-        const profileURL = record.UserName ? `${PROFILE_BASE_URL}${record.UserName}` : `${PROFILE_ID_BASE_URL}${record.AccountID}`;
-        const displayText = record.DisplayName?.trim() || record.UserName?.trim() || record.AccountID || TEXT_UNKNOWN;
-        const handleText = record.UserName ? `${TEXT_HANDLE_PREFIX}${record.UserName}` : "";
+        const trimmedDisplayName = (record.DisplayName || "").trim();
+        const trimmedHandle = (record.UserName || "").trim();
+        const hasDisplayName = trimmedDisplayName !== "";
+        const hasHandle = trimmedHandle !== "";
+        const formattedHandle = hasHandle ? `${TEXT_HANDLE_PREFIX}${trimmedHandle}` : "";
+        let displayText = TEXT_UNKNOWN;
+        if (hasDisplayName && hasHandle) {
+            displayText = `${trimmedDisplayName} (${formattedHandle})`;
+        } else if (hasDisplayName) {
+            displayText = trimmedDisplayName;
+        } else if (hasHandle) {
+            displayText = formattedHandle;
+        }
+        const profileURL = hasHandle ? `${PROFILE_BASE_URL}${trimmedHandle}` : "";
         const badges = [];
         if (metaSources.some(source => source.isMuted(record.AccountID))) {
             badges.push(`<span class="badge text-bg-warning me-2">${TEXT_MUTED}</span>`);
@@ -452,15 +461,17 @@
         if (metaSources.some(source => source.isBlocked(record.AccountID))) {
             badges.push(`<span class="badge text-bg-danger">${TEXT_BLOCKED}</span>`);
         }
-        if (includeFollowAction) {
-            const intentURL = record.UserName
-                ? `${FOLLOW_SCREEN_NAME_URL}${encodeURIComponent(record.UserName)}`
-                : `${FOLLOW_ACCOUNT_ID_URL}${encodeURIComponent(record.AccountID)}`;
+        if (includeFollowAction && hasHandle) {
+            const intentURL = `${FOLLOW_SCREEN_NAME_URL}${encodeURIComponent(trimmedHandle)}`;
             badges.push(`<a class="btn btn-sm btn-outline-primary ms-2" target="_blank" rel="noopener" href="${intentURL}">${TEXT_FOLLOW_BUTTON}</a>`);
         }
         const badgeHTML = badges.length ? `<div class="mt-2">${badges.join(" ")}</div>` : "";
-        const handleHTML = handleText ? `<span class="text-muted small">${escapeHTML(handleText)}</span>` : "";
-        return `<li class="mb-3 pb-3 border-bottom"><a class="text-decoration-none" target="_blank" rel="noopener" href="${profileURL}"><strong class="d-block">${escapeHTML(displayText)}</strong></a>${handleHTML}${badgeHTML}</li>`;
+        const handleHTML = hasHandle && hasDisplayName ? `<span class="text-muted small">${escapeHTML(formattedHandle)}</span>` : "";
+        const strongNameHTML = `<strong class="d-block">${escapeHTML(displayText)}</strong>`;
+        const nameHTML = profileURL
+            ? `<a class="text-decoration-none" target="_blank" rel="noopener" href="${profileURL}">${strongNameHTML}</a>`
+            : strongNameHTML;
+        return `<li class="mb-3 pb-3 border-bottom">${nameHTML}${handleHTML}${badgeHTML}</li>`;
     }
 
     function escapeHTML(input) {
