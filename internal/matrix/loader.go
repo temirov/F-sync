@@ -121,10 +121,12 @@ func ReadTwitterZip(zipPath string) (AccountSets, OwnerIdentity, error) {
 	loadIfNeeded(dataTypeBlock)
 
 	accountSets := AccountSets{
-		Followers: map[string]AccountRecord{},
-		Following: map[string]AccountRecord{},
-		Muted:     map[string]bool{},
-		Blocked:   map[string]bool{},
+		Followers:      map[string]AccountRecord{},
+		Following:      map[string]AccountRecord{},
+		Muted:          map[string]bool{},
+		Blocked:        map[string]bool{},
+		MutedRecords:   map[string]AccountRecord{},
+		BlockedRecords: map[string]AccountRecord{},
 	}
 
 	if data := blobs[followingFileName]; len(data) > 0 {

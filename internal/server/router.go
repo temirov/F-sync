@@ -438,10 +438,12 @@ func ownerSummary(owner matrix.OwnerIdentity) string {
 
 func copyAccountSets(source matrix.AccountSets) matrix.AccountSets {
 	return matrix.AccountSets{
-		Followers: copyAccountRecordMap(source.Followers),
-		Following: copyAccountRecordMap(source.Following),
-		Muted:     copyBoolMap(source.Muted),
-		Blocked:   copyBoolMap(source.Blocked),
+		Followers:      copyAccountRecordMap(source.Followers),
+		Following:      copyAccountRecordMap(source.Following),
+		Muted:          copyBoolMap(source.Muted),
+		Blocked:        copyBoolMap(source.Blocked),
+		MutedRecords:   copyAccountRecordMap(source.MutedRecords),
+		BlockedRecords: copyAccountRecordMap(source.BlockedRecords),
 	}
 }
 

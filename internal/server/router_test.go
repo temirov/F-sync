@@ -44,6 +44,29 @@ func (stub *comparisonServiceStub) RenderComparisonPage(pageData matrix.Comparis
 	return stub.renderedHTML, stub.renderError
 }
 
+type matrixComparisonServiceRecorder struct {
+	mutex          sync.Mutex
+	lastComparison matrix.ComparisonResult
+}
+
+func (service *matrixComparisonServiceRecorder) BuildComparison(accountSetsA matrix.AccountSets, accountSetsB matrix.AccountSets, ownerA matrix.OwnerIdentity, ownerB matrix.OwnerIdentity) matrix.ComparisonResult {
+	result := matrix.BuildComparison(accountSetsA, accountSetsB, ownerA, ownerB)
+	service.mutex.Lock()
+	service.lastComparison = result
+	service.mutex.Unlock()
+	return result
+}
+
+func (service *matrixComparisonServiceRecorder) RenderComparisonPage(pageData matrix.ComparisonPageData) (string, error) {
+	return "<html>ok</html>", nil
+}
+
+func (service *matrixComparisonServiceRecorder) LatestComparison() matrix.ComparisonResult {
+	service.mutex.Lock()
+	defer service.mutex.Unlock()
+	return service.lastComparison
+}
+
 type comparisonStoreStub struct {
 	snapshot server.ComparisonSnapshot
 }
@@ -62,6 +85,42 @@ func (comparisonStoreStub) Clear() server.ComparisonSnapshot {
 
 func (comparisonStoreStub) ResolveHandles(context.Context, matrix.AccountHandleResolver) map[string]error {
 	return nil
+}
+
+type handleResolutionRecorder struct {
+	results    map[string]handles.Result
+	callSignal chan struct{}
+}
+
+func newHandleResolutionRecorder(results map[string]handles.Result) *handleResolutionRecorder {
+	cloned := make(map[string]handles.Result, len(results))
+	for accountID, result := range results {
+		cloned[accountID] = result
+	}
+	return &handleResolutionRecorder{results: cloned, callSignal: make(chan struct{}, 1)}
+}
+
+func (resolver *handleResolutionRecorder) ResolveMany(_ context.Context, accountIDs []string) map[string]handles.Result {
+	resolved := make(map[string]handles.Result, len(accountIDs))
+	for _, accountID := range accountIDs {
+		if result, exists := resolver.results[accountID]; exists {
+			resolved[accountID] = result
+		}
+	}
+	select {
+	case resolver.callSignal <- struct{}{}:
+	default:
+	}
+	return resolved
+}
+
+func (resolver *handleResolutionRecorder) waitForCall(timeout time.Duration) bool {
+	select {
+	case <-resolver.callSignal:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
 }
 
 type resolvingStoreStub struct {
@@ -382,6 +441,148 @@ func TestUploadArchivesHandleResolution(t *testing.T) {
 	}
 }
 
+func TestComparisonUsesResolvedHandlesForBlockedOnlyAccounts(t *testing.T) {
+	const (
+		ownerAccountIDA             = "1"
+		ownerAccountIDB             = "2"
+		followingAccountIDA         = "10"
+		followerAccountIDA          = "11"
+		blockedAccountIDA           = "100"
+		blockedUserNameA            = "blocked_handle_a"
+		blockedDisplayNameA         = "Blocked Name A"
+		followingAccountIDB         = "20"
+		followerAccountIDB          = "21"
+		blockedAccountIDB           = "200"
+		blockedUserNameB            = "blocked_handle_b"
+		blockedDisplayNameB         = "Blocked Name B"
+		expectedStatusCodeOK        = http.StatusOK
+		comparisonPollingIterations = 10
+		comparisonPollingDelay      = 50 * time.Millisecond
+	)
+
+	service := &matrixComparisonServiceRecorder{}
+	handleResults := map[string]handles.Result{
+		followingAccountIDA: {Record: handles.AccountRecord{AccountID: followingAccountIDA, UserName: "friend_a", DisplayName: "Friend A"}},
+		followerAccountIDA:  {Record: handles.AccountRecord{AccountID: followerAccountIDA, UserName: "follower_a", DisplayName: "Follower A"}},
+		blockedAccountIDA:   {Record: handles.AccountRecord{AccountID: blockedAccountIDA, UserName: blockedUserNameA, DisplayName: blockedDisplayNameA}},
+		followingAccountIDB: {Record: handles.AccountRecord{AccountID: followingAccountIDB, UserName: "friend_b", DisplayName: "Friend B"}},
+		followerAccountIDB:  {Record: handles.AccountRecord{AccountID: followerAccountIDB, UserName: "follower_b", DisplayName: "Follower B"}},
+		blockedAccountIDB:   {Record: handles.AccountRecord{AccountID: blockedAccountIDB, UserName: blockedUserNameB, DisplayName: blockedDisplayNameB}},
+	}
+	resolver := newHandleResolutionRecorder(handleResults)
+
+	router, err := server.NewRouter(server.RouterConfig{
+		Service:        service,
+		HandleResolver: resolver,
+	})
+	if err != nil {
+		t.Fatalf("NewRouter returned error: %v", err)
+	}
+
+	archiveA := createArchive(t, map[string]string{
+		"manifest.js":  `{"userInfo":{"accountId":"` + ownerAccountIDA + `","userName":"owner_a","displayName":"Owner A"}}`,
+		"following.js": `[{"following":{"accountId":"` + followingAccountIDA + `","userName":"friend_a","displayName":"Friend A"}}]`,
+		"follower.js":  `[{"follower":{"accountId":"` + followerAccountIDA + `","userName":"follower_a","displayName":"Follower A"}}]`,
+		"block.js":     `[{"blocking":{"accountId":"` + blockedAccountIDA + `"}}]`,
+	})
+	archiveB := createArchive(t, map[string]string{
+		"manifest.js":  `{"userInfo":{"accountId":"` + ownerAccountIDB + `","userName":"owner_b","displayName":"Owner B"}}`,
+		"following.js": `[{"following":{"accountId":"` + followingAccountIDB + `","userName":"friend_b","displayName":"Friend B"}}]`,
+		"follower.js":  `[{"follower":{"accountId":"` + followerAccountIDB + `","userName":"follower_b","displayName":"Follower B"}}]`,
+		"block.js":     `[{"blocking":{"accountId":"` + blockedAccountIDB + `"}}]`,
+	})
+
+	recorder := httptest.NewRecorder()
+	request := newUploadRequest(t, archiveA)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != expectedStatusCodeOK {
+		t.Fatalf("expected status %d, got %d", expectedStatusCodeOK, recorder.Code)
+	}
+
+	recorder = httptest.NewRecorder()
+	request = newUploadRequest(t, archiveB)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != expectedStatusCodeOK {
+		t.Fatalf("expected status %d, got %d", expectedStatusCodeOK, recorder.Code)
+	}
+
+	if !resolver.waitForCall(handleResolutionWaitDuration) {
+		t.Fatalf("expected handle resolution to be triggered")
+	}
+
+	var (
+		comparison matrix.ComparisonResult
+		resolved   bool
+	)
+
+	for attempt := 0; attempt < comparisonPollingIterations; attempt++ {
+		recorder = httptest.NewRecorder()
+		request = httptest.NewRequest(http.MethodGet, "/", nil)
+		router.ServeHTTP(recorder, request)
+		if recorder.Code != expectedStatusCodeOK {
+			t.Fatalf("expected status %d, got %d", expectedStatusCodeOK, recorder.Code)
+		}
+		comparison = service.LatestComparison()
+
+		blockedRecordA, foundA := findAccountRecordByID(comparison.OwnerABlockedAll, blockedAccountIDA)
+		blockedRecordB, foundB := findAccountRecordByID(comparison.OwnerBBlockedAll, blockedAccountIDB)
+		if foundA && foundB &&
+			blockedRecordA.DisplayName == blockedDisplayNameA && blockedRecordA.UserName == blockedUserNameA &&
+			blockedRecordB.DisplayName == blockedDisplayNameB && blockedRecordB.UserName == blockedUserNameB {
+			resolved = true
+			break
+		}
+		time.Sleep(comparisonPollingDelay)
+	}
+
+	if !resolved {
+		t.Fatalf("blocked accounts did not resolve to handles")
+	}
+
+	testCases := []struct {
+		name                string
+		accountID           string
+		expectedDisplayName string
+		expectedUserName    string
+		recordsSelector     func(matrix.ComparisonResult) []matrix.AccountRecord
+	}{
+		{
+			name:                "owner a blocked metadata uses resolved handle",
+			accountID:           blockedAccountIDA,
+			expectedDisplayName: blockedDisplayNameA,
+			expectedUserName:    blockedUserNameA,
+			recordsSelector: func(result matrix.ComparisonResult) []matrix.AccountRecord {
+				return result.OwnerABlockedAll
+			},
+		},
+		{
+			name:                "owner b blocked metadata uses resolved handle",
+			accountID:           blockedAccountIDB,
+			expectedDisplayName: blockedDisplayNameB,
+			expectedUserName:    blockedUserNameB,
+			recordsSelector: func(result matrix.ComparisonResult) []matrix.AccountRecord {
+				return result.OwnerBBlockedAll
+			},
+		},
+	}
+
+	for _, testCase := range testCases {
+		testCase := testCase
+		t.Run(testCase.name, func(t *testing.T) {
+			record, found := findAccountRecordByID(testCase.recordsSelector(comparison), testCase.accountID)
+			if !found {
+				t.Fatalf("expected blocked record for %s", testCase.accountID)
+			}
+			if record.DisplayName != testCase.expectedDisplayName {
+				t.Fatalf("unexpected display name: %s", record.DisplayName)
+			}
+			if record.UserName != testCase.expectedUserName {
+				t.Fatalf("unexpected username: %s", record.UserName)
+			}
+		})
+	}
+}
+
 func TestUploadArchivesRejectsInvalidZip(t *testing.T) {
 	router, err := server.NewRouter(server.RouterConfig{})
 	if err != nil {
@@ -430,6 +631,15 @@ type uploadResponse struct {
 
 type uploadErrorResponse struct {
 	Error string `json:"error"`
+}
+
+func findAccountRecordByID(records []matrix.AccountRecord, accountID string) (matrix.AccountRecord, bool) {
+	for _, record := range records {
+		if record.AccountID == accountID {
+			return record, true
+		}
+	}
+	return matrix.AccountRecord{}, false
 }
 
 func newUploadRequest(t *testing.T, archivePath string) *http.Request {

@@ -68,7 +68,12 @@ func (resolver *stubResolver) ResolveMany(_ context.Context, accountIDs []string
 
 func TestResolveHandlesResolverAvailability(t *testing.T) {
 	decoratedRecord := matrix.AccountRecord{AccountID: matrixTestAccountIDDisabled, UserName: archivedUserName, DisplayName: archivedDisplayName}
-	baseAccountSets := matrix.AccountSets{Followers: map[string]matrix.AccountRecord{matrixTestAccountIDDisabled: decoratedRecord}, Following: map[string]matrix.AccountRecord{matrixTestAccountIDDisabled: decoratedRecord}}
+	baseAccountSets := matrix.AccountSets{
+		Followers: map[string]matrix.AccountRecord{matrixTestAccountIDDisabled: decoratedRecord},
+		Following: map[string]matrix.AccountRecord{matrixTestAccountIDDisabled: decoratedRecord},
+		Muted:     map[string]bool{matrixTestAccountIDDisabled: true},
+		Blocked:   map[string]bool{matrixTestAccountIDDisabled: true},
+	}
 
 	testCases := []struct {
 		name                string
@@ -128,6 +133,36 @@ func TestResolveHandlesResolverAvailability(t *testing.T) {
 			}
 			if followingRecord.DisplayName != testCase.expectedDisplayName {
 				t.Fatalf("unexpected following display name: %s", followingRecord.DisplayName)
+			}
+
+			mutedRecord := followerSet.MutedRecords[matrixTestAccountIDDisabled]
+			blockedRecord := followerSet.BlockedRecords[matrixTestAccountIDDisabled]
+			if testCase.expectedCalls > 0 {
+				if mutedRecord.AccountID != matrixTestAccountIDDisabled {
+					t.Fatalf("unexpected muted account id: %s", mutedRecord.AccountID)
+				}
+				if mutedRecord.UserName != testCase.expectedUserName {
+					t.Fatalf("unexpected muted username: %s", mutedRecord.UserName)
+				}
+				if mutedRecord.DisplayName != testCase.expectedDisplayName {
+					t.Fatalf("unexpected muted display name: %s", mutedRecord.DisplayName)
+				}
+				if blockedRecord.AccountID != matrixTestAccountIDDisabled {
+					t.Fatalf("unexpected blocked account id: %s", blockedRecord.AccountID)
+				}
+				if blockedRecord.UserName != testCase.expectedUserName {
+					t.Fatalf("unexpected blocked username: %s", blockedRecord.UserName)
+				}
+				if blockedRecord.DisplayName != testCase.expectedDisplayName {
+					t.Fatalf("unexpected blocked display name: %s", blockedRecord.DisplayName)
+				}
+			} else {
+				if mutedRecord.AccountID != "" || mutedRecord.UserName != "" || mutedRecord.DisplayName != "" {
+					t.Fatalf("expected muted metadata to remain empty")
+				}
+				if blockedRecord.AccountID != "" || blockedRecord.UserName != "" || blockedRecord.DisplayName != "" {
+					t.Fatalf("expected blocked metadata to remain empty")
+				}
 			}
 		})
 	}
@@ -197,6 +232,8 @@ func TestResolveHandlesResolution(t *testing.T) {
 			baseAccountSets := matrix.AccountSets{
 				Followers: map[string]matrix.AccountRecord{testCase.accountID: decoratedRecord},
 				Following: map[string]matrix.AccountRecord{testCase.accountID: decoratedRecord},
+				Muted:     map[string]bool{testCase.accountID: true},
+				Blocked:   map[string]bool{testCase.accountID: true},
 			}
 
 			followerSet := copyAccountSets(baseAccountSets)
@@ -231,6 +268,36 @@ func TestResolveHandlesResolution(t *testing.T) {
 				t.Fatalf("unexpected following display name: %s", followingRecord.DisplayName)
 			}
 
+			mutedRecord := followerSet.MutedRecords[testCase.accountID]
+			if mutedRecord.AccountID != testCase.accountID {
+				t.Fatalf("unexpected muted account id: %s", mutedRecord.AccountID)
+			}
+			blockedRecord := followerSet.BlockedRecords[testCase.accountID]
+			if blockedRecord.AccountID != testCase.accountID {
+				t.Fatalf("unexpected blocked account id: %s", blockedRecord.AccountID)
+			}
+			if testCase.expectError {
+				if mutedRecord.UserName != "" || mutedRecord.DisplayName != "" {
+					t.Fatalf("expected muted metadata to remain empty for %s", testCase.accountID)
+				}
+				if blockedRecord.UserName != "" || blockedRecord.DisplayName != "" {
+					t.Fatalf("expected blocked metadata to remain empty for %s", testCase.accountID)
+				}
+			} else {
+				if mutedRecord.UserName != testCase.expectedUserName {
+					t.Fatalf("unexpected muted username: %s", mutedRecord.UserName)
+				}
+				if mutedRecord.DisplayName != testCase.expectedDisplayName {
+					t.Fatalf("unexpected muted display name: %s", mutedRecord.DisplayName)
+				}
+				if blockedRecord.UserName != testCase.expectedUserName {
+					t.Fatalf("unexpected blocked username: %s", blockedRecord.UserName)
+				}
+				if blockedRecord.DisplayName != testCase.expectedDisplayName {
+					t.Fatalf("unexpected blocked display name: %s", blockedRecord.DisplayName)
+				}
+			}
+
 			if fetcher.callCount.Load() != testCase.expectedCalls {
 				t.Fatalf("unexpected fetcher call count: %d", fetcher.callCount.Load())
 			}
@@ -255,5 +322,20 @@ func copyAccountSets(original matrix.AccountSets) matrix.AccountSets {
 	for accountID, blocked := range original.Blocked {
 		copyBlocked[accountID] = blocked
 	}
-	return matrix.AccountSets{Followers: copyFollowers, Following: copyFollowing, Muted: copyMuted, Blocked: copyBlocked}
+	copyMutedRecords := make(map[string]matrix.AccountRecord, len(original.MutedRecords))
+	for accountID, record := range original.MutedRecords {
+		copyMutedRecords[accountID] = record
+	}
+	copyBlockedRecords := make(map[string]matrix.AccountRecord, len(original.BlockedRecords))
+	for accountID, record := range original.BlockedRecords {
+		copyBlockedRecords[accountID] = record
+	}
+	return matrix.AccountSets{
+		Followers:      copyFollowers,
+		Following:      copyFollowing,
+		Muted:          copyMuted,
+		Blocked:        copyBlocked,
+		MutedRecords:   copyMutedRecords,
+		BlockedRecords: copyBlockedRecords,
+	}
 }
