@@ -1,3 +1,4 @@
+// cmd/cresolve/main.go
 package main
 
 import (
@@ -5,267 +6,221 @@ import (
 	"context"
 	"encoding/csv"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/f-sync/fsync/internal/cresolver"
-	"github.com/f-sync/fsync/internal/handles"
+	"github.com/f-sync/fsync/internal/xresolver"
 )
-
-const (
-	defaultChromeBinaryPath         = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-	usageHeader                     = "usage:"
-	usageSingleID                   = "  cresolve <numeric_id>"
-	usageCSVCommand                 = "  cresolve -csv <id1> <id2> ..."
-	usageJSONCommand                = "  cat ids.txt | cresolve -json"
-	chromeBinaryEnvironmentVariable = "CHROME_BIN"
-	csvHeaderIdentifier             = "id"
-	csvHeaderHandle                 = "handle"
-	csvHeaderDisplayName            = "display_name"
-	errMessageReadIdentifiers       = "stdin read error"
-	errMessageOutputFormatConflict  = "cannot specify both -csv and -json"
-	errMessageCreateService         = "create resolver service"
-	errMessageResolveIdentifiers    = "resolve account identifiers"
-	errMessageWriteCSV              = "write CSV output"
-)
-
-var disabledChromeRequestDelay = -1 * time.Millisecond
-
-type outputFormat string
-
-const (
-	outputFormatText outputFormat = "text"
-	outputFormatCSV  outputFormat = "csv"
-	outputFormatJSON outputFormat = "json"
-)
-
-type profileOutput struct {
-	Identifier  string `json:"id"`
-	Handle      string `json:"handle"`
-	DisplayName string `json:"display_name"`
-	SourceURL   string `json:"from_url"`
-	Error       string `json:"error,omitempty"`
-}
-
-type cliOptions struct {
-	outputFormat      outputFormat
-	chromeBinaryPath  string
-	virtualTimeBudget time.Duration
-	accountTimeout    time.Duration
-	requestDelay      time.Duration
-	requestJitter     time.Duration
-	burstSize         int
-	burstRest         time.Duration
-	burstRestJitter   time.Duration
-}
 
 func main() {
-	options, ids := parseArguments()
-	if len(ids) == 0 {
-		printUsage()
-		os.Exit(2)
-	}
+	// Output modes
+	flagCSV := flag.Bool("csv", false, "output CSV: id,handle,display_name")
+	flagJSON := flag.Bool("json", false, "output JSON lines")
 
-	serviceConfig := cresolver.Config{
-		Handles: handles.Config{
-			ChromeBinaryPath:        options.chromeBinaryPath,
-			ChromeUserAgent:         handles.DefaultChromeUserAgent(nil),
-			ChromeVirtualTimeBudget: options.virtualTimeBudget,
-			ChromeRequestDelay:      disabledChromeRequestDelay,
-		},
-		AccountTimeout: options.accountTimeout,
-		RequestPacing: cresolver.RequestPacingConfig{
-			BaseDelay:       options.requestDelay,
-			Jitter:          options.requestJitter,
-			BurstSize:       options.burstSize,
-			BurstRest:       options.burstRest,
-			BurstRestJitter: options.burstRestJitter,
-		},
-	}
+	// Resolver knobs
+	flagChrome := flag.String("chrome", defaultChromePath(), "path to Chrome/Chromium binary (or set CHROME_BIN)")
+	flagVT := flag.Int("vtbudget", 15000, "Chrome virtual time budget (ms)")
+	flagTimeout := flag.Duration("timeout", 30*time.Second, "per-ID timeout")
+	flagAttempt := flag.Duration("attempt-timeout", 15*time.Second, "per-attempt timeout (<= per-ID)")
 
-	resolverService, serviceErr := cresolver.NewService(serviceConfig)
-	if serviceErr != nil {
-		fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageCreateService, serviceErr)
-		os.Exit(1)
-	}
+	// Pacing knobs
+	flagDelay := flag.Duration("delay", 500*time.Millisecond, "base delay between requests")
+	flagJitter := flag.Duration("jitter", 0, "jitter applied to delay in [-jitter,+jitter]")
+	flagBurstSize := flag.Int("burst-size", 0, "requests per burst (0 = no bursting)")
+	flagBurstRest := flag.Duration("burst-rest", 0, "rest duration after each burst")
+	flagBurstJitter := flag.Duration("burst-jitter", 0, "jitter for burst rest in [-burst-jitter,+burst-jitter]")
 
-	applicationContext, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
-	defer cancel()
+	// Retry knobs
+	flagRetries := flag.Int("retries", 1, "additional attempts per ID (0 = single attempt)")
+	flagRetryMin := flag.Duration("retry-min", 400*time.Millisecond, "minimum backoff between attempts")
+	flagRetryMax := flag.Duration("retry-max", 1500*time.Millisecond, "maximum backoff between attempts")
 
-	resolutions, resolveErr := resolverService.ResolveBatch(applicationContext, cresolver.Request{AccountIDs: ids})
+	// UA rotation
+	flagUAs := flag.String("ua-list", "", "comma-separated UA list to rotate (optional)")
 
-	csvWriter := initializeCSVWriter(options.outputFormat)
-	jsonEncoder := initializeJSONEncoder(options.outputFormat)
+	// Debug
+	flagVerbose := flag.Bool("verbose", false, "verbose timings to stderr")
 
-	for _, resolution := range resolutions {
-		output := profileOutput{
-			Identifier:  resolution.AccountID,
-			Handle:      resolution.Record.UserName,
-			DisplayName: resolution.Record.DisplayName,
-			SourceURL:   resolution.IntentURL,
-		}
-		if resolution.Err != nil {
-			output.Error = resolution.Err.Error()
-		}
-
-		switch options.outputFormat {
-		case outputFormatCSV:
-			if csvWriter != nil {
-				_ = csvWriter.Write([]string{output.Identifier, output.Handle, output.DisplayName})
-			}
-		case outputFormatJSON:
-			if jsonEncoder != nil {
-				_ = jsonEncoder.Encode(output)
-			}
-		default:
-			emitTextOutput(output)
-		}
-	}
-
-	if csvWriter != nil {
-		csvWriter.Flush()
-		if err := csvWriter.Error(); err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageWriteCSV, err)
-			os.Exit(1)
-		}
-	}
-
-	if resolveErr != nil {
-		if !errors.Is(resolveErr, context.Canceled) {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageResolveIdentifiers, resolveErr)
-		}
-		os.Exit(1)
-	}
-}
-
-func parseArguments() (cliOptions, []string) {
-	csvFlag := flag.Bool("csv", false, "output CSV: id,handle,display_name")
-	jsonFlag := flag.Bool("json", false, "output JSON lines")
-	chromeFlag := flag.String("chrome", defaultChromeBinaryPath, "path to Chrome/Chromium binary (or set CHROME_BIN)")
-	virtualTimeBudgetFlag := flag.Int("vtbudget", 15000, "Chrome virtual time budget (ms)")
-	timeoutFlag := flag.Duration("timeout", 30*time.Second, "per-ID timeout")
-	delayFlag := flag.Duration("delay", 500*time.Millisecond, "base delay between requests")
-	jitterFlag := flag.Duration("jitter", 0, "add uniform jitter in [-jitter,+jitter] to each delay (e.g. 300ms)")
-	burstSizeFlag := flag.Int("burst-size", 0, "number of requests per burst (0 disables bursting)")
-	burstRestFlag := flag.Duration("burst-rest", 0, "rest duration after each burst (e.g. 5s)")
-	burstRestJitterFlag := flag.Duration("burst-jitter", 0, "jitter for burst rest in [-burst-jitter,+burst-jitter]")
 	flag.Parse()
 
-	output := determineOutputFormat(*csvFlag, *jsonFlag)
-
-	chromeBinaryPath := os.Getenv(chromeBinaryEnvironmentVariable)
-	if strings.TrimSpace(chromeBinaryPath) == "" {
-		chromeBinaryPath = *chromeFlag
+	chromeBinaryPath := os.Getenv("CHROME_BIN")
+	if chromeBinaryPath == "" {
+		chromeBinaryPath = *flagChrome
 	}
 
-	options := cliOptions{
-		outputFormat:      output,
-		chromeBinaryPath:  chromeBinaryPath,
-		virtualTimeBudget: time.Duration(*virtualTimeBudgetFlag) * time.Millisecond,
-		accountTimeout:    *timeoutFlag,
-		requestDelay:      *delayFlag,
-		requestJitter:     *jitterFlag,
-		burstSize:         *burstSizeFlag,
-		burstRest:         *burstRestFlag,
-		burstRestJitter:   *burstRestJitterFlag,
-	}
-
-	identifiers := collectIdentifiers(flag.Args())
-	if len(identifiers) == 0 {
-		stdinIdentifiers, err := readIdentifiersFromStdin()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageReadIdentifiers, err)
+	ids := collectIDs(flag.Args())
+	if len(ids) == 0 {
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			if s := strings.TrimSpace(sc.Text()); s != "" {
+				ids = append(ids, s)
+			}
+		}
+		if err := sc.Err(); err != nil {
+			fmt.Fprintln(os.Stderr, "stdin read error:", err)
 			os.Exit(2)
 		}
-		identifiers = stdinIdentifiers
 	}
-	return options, identifiers
-}
-
-func determineOutputFormat(csvRequested bool, jsonRequested bool) outputFormat {
-	if csvRequested && jsonRequested {
-		fmt.Fprintln(os.Stderr, errMessageOutputFormatConflict)
+	if len(ids) == 0 {
+		fmt.Fprintln(os.Stderr, "usage:")
+		fmt.Fprintln(os.Stderr, "  cresolve <numeric_id>")
+		fmt.Fprintln(os.Stderr, "  cresolve -csv <id1> <id2> ...")
+		fmt.Fprintln(os.Stderr, "  cat ids.txt | cresolve -json")
 		os.Exit(2)
 	}
-	if csvRequested {
-		return outputFormatCSV
-	}
-	if jsonRequested {
-		return outputFormatJSON
-	}
-	return outputFormatText
-}
 
-func collectIdentifiers(arguments []string) []string {
-	identifiers := make([]string, 0, len(arguments))
-	for _, argument := range arguments {
-		trimmed := strings.TrimSpace(argument)
-		if trimmed == "" {
-			continue
+	cfg := xresolver.Config{
+		ChromePath:          chromeBinaryPath,
+		VirtualTimeBudgetMS: *flagVT,
+		PerIDTimeout:        *flagTimeout,
+		AttemptTimeout:      *flagAttempt,
+
+		Delay:       *flagDelay,
+		Jitter:      *flagJitter,
+		BurstSize:   *flagBurstSize,
+		BurstRest:   *flagBurstRest,
+		BurstJitter: *flagBurstJitter,
+
+		Retries:  *flagRetries,
+		RetryMin: *flagRetryMin,
+		RetryMax: *flagRetryMax,
+
+		UserAgents: splitCSV(*flagUAs),
+	}
+	if *flagVerbose {
+		cfg.Logf = func(format string, args ...any) {
+			fmt.Fprintf(os.Stderr, "[%s] ", time.Now().Format("15:04:05.000"))
+			fmt.Fprintf(os.Stderr, format, args...)
+			fmt.Fprintln(os.Stderr)
 		}
-		identifiers = append(identifiers, trimmed)
 	}
-	return identifiers
-}
 
-func readIdentifiersFromStdin() ([]string, error) {
-	scanner := bufio.NewScanner(os.Stdin)
-	identifiers := []string{}
-	for scanner.Scan() {
-		trimmed := strings.TrimSpace(scanner.Text())
-		if trimmed == "" {
-			continue
+	// Construct service with a Chrome renderer.
+	svc := xresolver.NewService(cfg, xresolver.NewChromeRenderer())
+
+	// Cancel on SIGINT/SIGTERM
+	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	// Call the service
+	res := svc.ResolveBatch(rootCtx, xresolver.Request{IDs: ids})
+
+	// Presentation (CLI only)
+	switch {
+	case *flagJSON:
+		enc := json.NewEncoder(os.Stdout)
+		for _, p := range res {
+			_ = enc.Encode(p)
 		}
-		identifiers = append(identifiers, trimmed)
+	case *flagCSV:
+		w := csv.NewWriter(os.Stdout)
+		_ = w.Write([]string{"id", "handle", "display_name"})
+		for _, p := range res {
+			_ = w.Write([]string{p.ID, p.Handle, p.DisplayName})
+		}
+		w.Flush()
+	default:
+		for _, p := range res {
+			if p.Handle != "" {
+				fmt.Printf("%s: %s (retrieved from %s)\n", p.ID, p.Handle, p.FromURL)
+				if p.DisplayName != "" {
+					fmt.Printf("  name: %s\n", p.DisplayName)
+				}
+			} else {
+				fmt.Printf("%s:\n", p.ID)
+				if p.Err != "" {
+					fmt.Printf("  err:  %s\n", p.Err)
+				}
+			}
+		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-	return identifiers, nil
 }
 
-func initializeCSVWriter(format outputFormat) *csv.Writer {
-	if format != outputFormatCSV {
+func collectIDs(args []string) []string {
+	var out []string
+	for _, a := range args {
+		if s := strings.TrimSpace(a); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+// defaultChromePath detects a sensible Chrome/Chromium path per-OS.
+// Priority: CHROME_BIN (handled earlier), then common locations & PATH.
+func defaultChromePath() string {
+	// If CHROME_BIN is set, the caller will use it (handled in main).
+	// Here we try platform defaults and PATH lookups.
+	switch runtime.GOOS {
+	case "darwin":
+		// Standard macOS app bundle path
+		return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	case "windows":
+		// Try PATH first
+		if p, err := exec.LookPath("chrome.exe"); err == nil {
+			return p
+		}
+		// Common install paths (best-effort; user can override with --chrome)
+		candidates := []string{
+			`C:\Program Files\Google\Chrome\Application\chrome.exe`,
+			`C:\Program Files (x86)\Google\Chrome\Application\chrome.exe`,
+		}
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
+		// Fallback: let it be empty; user must supply --chrome
+		return "chrome.exe"
+	default: // "linux" and others
+		// Try common binary names in PATH
+		names := []string{
+			"google-chrome-stable",
+			"google-chrome",
+			"chromium",
+			"chromium-browser",
+			"chrome",
+		}
+		for _, n := range names {
+			if p, err := exec.LookPath(n); err == nil {
+				return p
+			}
+		}
+		// Try a few absolute paths often used by packages/snap
+		candidates := []string{
+			"/usr/bin/google-chrome-stable",
+			"/usr/bin/google-chrome",
+			"/usr/bin/chromium",
+			"/usr/bin/chromium-browser",
+			"/snap/bin/chromium",
+		}
+		for _, c := range candidates {
+			if _, err := os.Stat(c); err == nil {
+				return c
+			}
+		}
+		// Last resort: user must provide --chrome or CHROME_BIN
+		return "google-chrome"
+	}
+}
+
+func splitCSV(s string) []string {
+	if strings.TrimSpace(s) == "" {
 		return nil
 	}
-	writer := csv.NewWriter(os.Stdout)
-	_ = writer.Write([]string{csvHeaderIdentifier, csvHeaderHandle, csvHeaderDisplayName})
-	writer.Flush()
-	return writer
-}
-
-func initializeJSONEncoder(format outputFormat) *json.Encoder {
-	if format != outputFormatJSON {
-		return nil
-	}
-	encoder := json.NewEncoder(os.Stdout)
-	encoder.SetEscapeHTML(false)
-	return encoder
-}
-
-func emitTextOutput(output profileOutput) {
-	if output.Handle != "" {
-		fmt.Printf("%s: %s (retrieved from %s)\n", output.Identifier, output.Handle, output.SourceURL)
-		if output.DisplayName != "" {
-			fmt.Printf("  name: %s\n", output.DisplayName)
-		}
-	} else {
-		fmt.Printf("%s:\n", output.Identifier)
-		if output.Error != "" {
-			fmt.Printf("  err:  %s\n", output.Error)
+	parts := strings.Split(s, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
 		}
 	}
-}
-
-func printUsage() {
-	fmt.Fprintln(os.Stderr, usageHeader)
-	fmt.Fprintln(os.Stderr, usageSingleID)
-	fmt.Fprintln(os.Stderr, usageCSVCommand)
-	fmt.Fprintln(os.Stderr, usageJSONCommand)
+	return out
 }
