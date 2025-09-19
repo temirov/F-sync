@@ -18,6 +18,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/f-sync/fsync/internal/handles"
 )
 
 const (
@@ -35,13 +37,6 @@ var (
 
 	metaOGTitle  = regexp.MustCompile(`property="og:title"[^>]*content="([^"]+)"`)
 	metaTitleTag = regexp.MustCompile(`<title[^>]*>([^<]+)</title>`)
-
-	uaPool = []string{
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.850.0 Safari/537.36",
-	}
 )
 
 type profileInfo struct {
@@ -142,7 +137,7 @@ func main() {
 
 func resolveOne(ctx context.Context, chromeBinaryPath string, vtBudgetMS int, id string) profileInfo {
 	intentURL := "https://x.com/intent/user?user_id=" + id
-	userAgent := uaPool[rand.Intn(len(uaPool))]
+	userAgent := handles.DefaultChromeUserAgent(nil)
 
 	htmlDoc, err := renderWithHeadlessChrome(ctx, chromeBinaryPath, userAgent, vtBudgetMS, intentURL)
 	if err != nil || strings.TrimSpace(htmlDoc) == "" {
