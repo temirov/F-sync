@@ -65,70 +65,70 @@ func TestServiceResolveBatch(t *testing.T) {
 	}{
 		{
 			name:       "resolves accounts in order",
-			requestIDs: []string{"108642770", "1118018827147567104"},
+			requestIDs: []string{accountIDJamesMarsh, accountIDMoonOfAMoon},
 			records: map[string]handles.AccountRecord{
-				"108642770":           {AccountID: "108642770", UserName: "jamesmarsh79", DisplayName: "James Marsh"},
-				"1118018827147567104": {AccountID: "1118018827147567104", UserName: "moon_of_a_moon", DisplayName: "Moon"},
+				accountIDJamesMarsh:  resolverTestUtils.AccountRecord(accountIDJamesMarsh, userNameJamesMarsh, displayNameJamesMarsh),
+				accountIDMoonOfAMoon: resolverTestUtils.AccountRecord(accountIDMoonOfAMoon, userNameMoonOfAMoon, displayNameMoon),
 			},
 			expectedResolutions: []expectedResolution{
 				{
-					accountID:   "108642770",
-					userName:    "jamesmarsh79",
-					displayName: "James Marsh",
-					intentURL:   "https://x.com/intent/user?user_id=108642770",
+					accountID:   accountIDJamesMarsh,
+					userName:    userNameJamesMarsh,
+					displayName: displayNameJamesMarsh,
+					intentURL:   resolverTestUtils.IntentURL(accountIDJamesMarsh),
 				},
 				{
-					accountID:   "1118018827147567104",
-					userName:    "moon_of_a_moon",
-					displayName: "Moon",
-					intentURL:   "https://x.com/intent/user?user_id=1118018827147567104",
+					accountID:   accountIDMoonOfAMoon,
+					userName:    userNameMoonOfAMoon,
+					displayName: displayNameMoon,
+					intentURL:   resolverTestUtils.IntentURL(accountIDMoonOfAMoon),
 				},
 			},
 		},
 		{
 			name:       "skips blank identifiers",
-			requestIDs: []string{"   ", "1119714183119900673", ""},
+			requestIDs: []string{whitespaceAccountIdentifier, accountIDLudditeEngineer, emptyAccountIdentifier},
 			records: map[string]handles.AccountRecord{
-				"1119714183119900673": {AccountID: "1119714183119900673", UserName: "ludditeengineer", DisplayName: "Mike"},
+				accountIDLudditeEngineer: resolverTestUtils.AccountRecord(accountIDLudditeEngineer, userNameLudditeEngineer, displayNameMike),
 			},
 			expectedResolutions: []expectedResolution{
 				{
-					accountID:   "1119714183119900673",
-					userName:    "ludditeengineer",
-					displayName: "Mike",
-					intentURL:   "https://x.com/intent/user?user_id=1119714183119900673",
+					accountID:   accountIDLudditeEngineer,
+					userName:    userNameLudditeEngineer,
+					displayName: displayNameMike,
+					intentURL:   resolverTestUtils.IntentURL(accountIDLudditeEngineer),
 				},
 			},
 		},
 		{
 			name:       "includes resolver errors",
-			requestIDs: []string{"108642770", "unknown"},
+			requestIDs: []string{accountIDJamesMarsh, accountIDUnknown},
 			records: map[string]handles.AccountRecord{
-				"108642770": {AccountID: "108642770", UserName: "jamesmarsh79", DisplayName: "James Marsh"},
-				"unknown":   {AccountID: "unknown"},
+				accountIDJamesMarsh: resolverTestUtils.AccountRecord(accountIDJamesMarsh, userNameJamesMarsh, displayNameJamesMarsh),
+				accountIDUnknown:    resolverTestUtils.MinimalAccountRecord(accountIDUnknown),
 			},
 			errors: map[string]error{
-				"unknown": errors.New("profile not found"),
+				accountIDUnknown: errProfileNotFound,
 			},
 			expectedResolutions: []expectedResolution{
 				{
-					accountID:   "108642770",
-					userName:    "jamesmarsh79",
-					displayName: "James Marsh",
-					intentURL:   "https://x.com/intent/user?user_id=108642770",
+					accountID:   accountIDJamesMarsh,
+					userName:    userNameJamesMarsh,
+					displayName: displayNameJamesMarsh,
+					intentURL:   resolverTestUtils.IntentURL(accountIDJamesMarsh),
 				},
 				{
-					accountID: "unknown",
-					intentURL: "https://x.com/intent/user?user_id=unknown",
-					err:       errors.New("profile not found"),
+					accountID: accountIDUnknown,
+					intentURL: resolverTestUtils.IntentURL(accountIDUnknown),
+					err:       errProfileNotFound,
 				},
 			},
 		},
 		{
 			name:       "applies account timeout",
-			requestIDs: []string{"108642770"},
+			requestIDs: []string{accountIDJamesMarsh},
 			records: map[string]handles.AccountRecord{
-				"108642770": {AccountID: "108642770", UserName: "jamesmarsh79"},
+				accountIDJamesMarsh: resolverTestUtils.AccountRecordWithoutDisplayName(accountIDJamesMarsh, userNameJamesMarsh),
 			},
 			config: cresolver.Config{AccountTimeout: 2 * time.Second},
 			observer: func(t *testing.T, callIndex int, accountID string, accountCtx context.Context) {
@@ -143,9 +143,9 @@ func TestServiceResolveBatch(t *testing.T) {
 			},
 			expectedResolutions: []expectedResolution{
 				{
-					accountID: "108642770",
-					userName:  "jamesmarsh79",
-					intentURL: "https://x.com/intent/user?user_id=108642770",
+					accountID: accountIDJamesMarsh,
+					userName:  userNameJamesMarsh,
+					intentURL: resolverTestUtils.IntentURL(accountIDJamesMarsh),
 				},
 			},
 		},
@@ -211,8 +211,8 @@ func TestServiceResolveBatchContextCancellation(t *testing.T) {
 
 	cancelingStub := &accountResolverStub{
 		records: map[string]handles.AccountRecord{
-			"108642770":           {AccountID: "108642770", UserName: "jamesmarsh79"},
-			"1118018827147567104": {AccountID: "1118018827147567104", UserName: "moon_of_a_moon"},
+			accountIDJamesMarsh:  resolverTestUtils.AccountRecordWithoutDisplayName(accountIDJamesMarsh, userNameJamesMarsh),
+			accountIDMoonOfAMoon: resolverTestUtils.AccountRecordWithoutDisplayName(accountIDMoonOfAMoon, userNameMoonOfAMoon),
 		},
 	}
 
@@ -226,21 +226,21 @@ func TestServiceResolveBatchContextCancellation(t *testing.T) {
 		t.Fatalf("create service: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := resolverTestUtils.NewCancelableContext(t)
 	cancelingStub.callObserver = func(callIndex int, accountID string, accountCtx context.Context) {
 		if callIndex == 0 {
 			cancel()
 		}
 	}
 
-	resolutions, resolveErr := service.ResolveBatch(ctx, cresolver.Request{AccountIDs: []string{"108642770", "1118018827147567104"}})
+	resolutions, resolveErr := service.ResolveBatch(ctx, cresolver.Request{AccountIDs: []string{accountIDJamesMarsh, accountIDMoonOfAMoon}})
 	if !errors.Is(resolveErr, context.Canceled) {
 		t.Fatalf("expected context cancellation error, received %v", resolveErr)
 	}
 	if len(resolutions) != 1 {
 		t.Fatalf("expected one resolution before cancellation, received %d", len(resolutions))
 	}
-	if resolutions[0].AccountID != "108642770" {
+	if resolutions[0].AccountID != accountIDJamesMarsh {
 		t.Fatalf("expected first account to be resolved before cancellation, received %s", resolutions[0].AccountID)
 	}
 }
@@ -256,11 +256,11 @@ func TestServiceResolveMany(t *testing.T) {
 	}{
 		{
 			name:       "propagates context cancellation to remaining identifiers",
-			requestIDs: []string{"108642770", "1118018827147567104"},
+			requestIDs: []string{accountIDJamesMarsh, accountIDMoonOfAMoon},
 			stub: &accountResolverStub{
 				records: map[string]handles.AccountRecord{
-					"108642770":           {AccountID: "108642770", UserName: "jamesmarsh79"},
-					"1118018827147567104": {AccountID: "1118018827147567104", UserName: "moon_of_a_moon"},
+					accountIDJamesMarsh:  resolverTestUtils.AccountRecordWithoutDisplayName(accountIDJamesMarsh, userNameJamesMarsh),
+					accountIDMoonOfAMoon: resolverTestUtils.AccountRecordWithoutDisplayName(accountIDMoonOfAMoon, userNameMoonOfAMoon),
 				},
 			},
 			cancelAfterFirst: true,
@@ -272,7 +272,7 @@ func TestServiceResolveMany(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
-			ctx, cancel := context.WithCancel(context.Background())
+			ctx, cancel := resolverTestUtils.NewCancelableContext(t)
 			if testCase.cancelAfterFirst {
 				testCase.stub.callObserver = func(callIndex int, accountID string, accountCtx context.Context) {
 					if callIndex == 0 {
@@ -291,12 +291,12 @@ func TestServiceResolveMany(t *testing.T) {
 				t.Fatalf("expected %d results, received %d", len(testCase.requestIDs), len(results))
 			}
 
-			first := results["108642770"]
+			first := results[accountIDJamesMarsh]
 			if first.Err != nil {
 				t.Fatalf("expected first account to resolve without error, received %v", first.Err)
 			}
 
-			second := results["1118018827147567104"]
+			second := results[accountIDMoonOfAMoon]
 			if !errors.Is(second.Err, context.Canceled) {
 				t.Fatalf("expected cancellation error for second account, received %v", second.Err)
 			}
