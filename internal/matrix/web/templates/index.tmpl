@@ -67,6 +67,12 @@
                     {{ end }}
                 </div>
                 <div class="card-body" id="comparisonPanel" data-has-comparison="{{ if .HasComparison }}true{{ else }}false{{ end }}">
+                    <div id="comparisonProgress" class="mb-3 is-hidden">
+                        <div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100">
+                            <div class="progress-bar" id="comparisonProgressBar" style="width: 0%;" aria-valuenow="0">0%</div>
+                        </div>
+                        <p class="small text-muted mt-2 mb-0" id="comparisonProgressText"></p>
+                    </div>
                     {{ if .HasComparison }}
                         <nav class="nav nav-pills flex-wrap gap-2 mb-4" aria-label="Comparison sections">
                             <a class="btn btn-outline-primary" href="#overview">Overview</a>

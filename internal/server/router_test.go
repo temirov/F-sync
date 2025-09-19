@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -20,13 +21,6 @@ import (
 	"github.com/f-sync/fsync/internal/handles"
 	"github.com/f-sync/fsync/internal/matrix"
 	"github.com/f-sync/fsync/internal/server"
-)
-
-const (
-	stubSlotLabelPrimary          = "Archive A"
-	stubSlotLabelSecondary        = "Archive B"
-	handleResolutionWaitDuration  = 500 * time.Millisecond
-	handleResolutionNoCallTimeout = 100 * time.Millisecond
 )
 
 type comparisonServiceStub struct {
@@ -83,9 +77,7 @@ func (comparisonStoreStub) Clear() server.ComparisonSnapshot {
 	return server.ComparisonSnapshot{}
 }
 
-func (comparisonStoreStub) ResolveHandles(context.Context, matrix.AccountHandleResolver) map[string]error {
-	return nil
-}
+func (comparisonStoreStub) ApplyResolvedComparison(server.ComparisonData) {}
 
 type handleResolutionRecorder struct {
 	results    map[string]handles.Result
@@ -123,83 +115,29 @@ func (resolver *handleResolutionRecorder) waitForCall(timeout time.Duration) boo
 	}
 }
 
-type resolvingStoreStub struct {
-	uploads        []server.ArchiveUpload
-	resolveSignals chan struct{}
-	mutex          sync.Mutex
-}
-
-func newResolvingStoreStub() *resolvingStoreStub {
-	return &resolvingStoreStub{resolveSignals: make(chan struct{}, 1)}
-}
-
-func (stub *resolvingStoreStub) Snapshot() server.ComparisonSnapshot {
-	stub.mutex.Lock()
-	defer stub.mutex.Unlock()
-	return stub.snapshotLocked()
-}
-
-func (stub *resolvingStoreStub) Upsert(upload server.ArchiveUpload) (server.ComparisonSnapshot, error) {
-	stub.mutex.Lock()
-	defer stub.mutex.Unlock()
-	stub.uploads = append(stub.uploads, upload)
-	return stub.snapshotLocked(), nil
-}
-
-func (stub *resolvingStoreStub) Clear() server.ComparisonSnapshot {
-	stub.mutex.Lock()
-	defer stub.mutex.Unlock()
-	stub.uploads = nil
-	return server.ComparisonSnapshot{}
-}
-
-func (stub *resolvingStoreStub) ResolveHandles(context.Context, matrix.AccountHandleResolver) map[string]error {
-	select {
-	case stub.resolveSignals <- struct{}{}:
-	default:
-	}
-	return nil
-}
-
-func (stub *resolvingStoreStub) snapshotLocked() server.ComparisonSnapshot {
-	uploads := make([]matrix.UploadSummary, 0, len(stub.uploads))
-	for index, upload := range stub.uploads {
-		slotLabel := stubSlotLabelPrimary
-		if index == 1 {
-			slotLabel = stubSlotLabelSecondary
-		}
-		uploads = append(uploads, matrix.UploadSummary{
-			SlotLabel:  slotLabel,
-			OwnerLabel: upload.Owner.DisplayName,
-			FileName:   upload.FileName,
-		})
-	}
-	var comparisonData *server.ComparisonData
-	if len(stub.uploads) >= 2 {
-		comparisonData = &server.ComparisonData{
-			AccountSetsA: stub.uploads[0].AccountSets,
-			AccountSetsB: stub.uploads[1].AccountSets,
-			OwnerA:       stub.uploads[0].Owner,
-			OwnerB:       stub.uploads[1].Owner,
-		}
-	}
-	return server.ComparisonSnapshot{Uploads: uploads, ComparisonData: comparisonData}
-}
-
-func (stub *resolvingStoreStub) waitForResolveHandles(timeout time.Duration) bool {
-	select {
-	case <-stub.resolveSignals:
-		return true
-	case <-time.After(timeout):
-		return false
-	}
-}
-
 type accountHandleResolverStub struct{}
 
 func (accountHandleResolverStub) ResolveMany(context.Context, []string) map[string]handles.Result {
 	return nil
 }
+
+type staticSnapshotStore struct {
+	snapshot server.ComparisonSnapshot
+}
+
+func (stub staticSnapshotStore) Snapshot() server.ComparisonSnapshot {
+	return stub.snapshot
+}
+
+func (staticSnapshotStore) Upsert(server.ArchiveUpload) (server.ComparisonSnapshot, error) {
+	return server.ComparisonSnapshot{}, nil
+}
+
+func (staticSnapshotStore) Clear() server.ComparisonSnapshot {
+	return server.ComparisonSnapshot{}
+}
+
+func (staticSnapshotStore) ApplyResolvedComparison(server.ComparisonData) {}
 
 func TestServeComparisonResponses(t *testing.T) {
 	const (
@@ -367,97 +305,142 @@ func TestUploadArchivesFlow(t *testing.T) {
 	}
 }
 
-func TestUploadArchivesHandleResolution(t *testing.T) {
-	primaryArchiveContents := map[string]string{
-		"manifest.js":  `{"userInfo":{"accountId":"1","userName":"owner_a","displayName":"Owner A"}}`,
-		"following.js": `[{"following":{"accountId":"10","userName":"friend_a","displayName":"Friend A"}}]`,
-		"follower.js":  `[{"follower":{"accountId":"11","userName":"follower_a","displayName":"Follower A"}}]`,
-	}
-	secondaryArchiveContents := map[string]string{
-		"manifest.js":  `{"userInfo":{"accountId":"2","userName":"owner_b","displayName":"Owner B"}}`,
-		"following.js": `[{"following":{"accountId":"20","userName":"friend_b","displayName":"Friend B"}}]`,
-		"follower.js":  `[{"follower":{"accountId":"21","userName":"follower_b","displayName":"Follower B"}}]`,
+func TestStartComparisonTaskValidations(t *testing.T) {
+	comparisonReadySnapshot := server.ComparisonSnapshot{
+		ComparisonData: &server.ComparisonData{
+			AccountSetsA: matrix.AccountSets{Followers: map[string]matrix.AccountRecord{"100": {AccountID: "100"}}},
+			AccountSetsB: matrix.AccountSets{Followers: map[string]matrix.AccountRecord{"200": {AccountID: "200"}}},
+			OwnerA:       matrix.OwnerIdentity{AccountID: "1"},
+			OwnerB:       matrix.OwnerIdentity{AccountID: "2"},
+			FileNameA:    "primary.zip",
+			FileNameB:    "secondary.zip",
+		},
 	}
 
 	testCases := []struct {
-		name             string
-		handleResolver   matrix.AccountHandleResolver
-		expectResolution bool
+		name           string
+		resolver       matrix.AccountHandleResolver
+		snapshot       server.ComparisonSnapshot
+		expectedStatus int
+		expectedError  string
 	}{
 		{
-			name:             "handle resolver triggers asynchronous resolution",
-			handleResolver:   accountHandleResolverStub{},
-			expectResolution: true,
+			name:           "missing resolver returns error",
+			resolver:       nil,
+			snapshot:       comparisonReadySnapshot,
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "handle resolver is not configured",
 		},
 		{
-			name:             "missing resolver skips asynchronous resolution",
-			handleResolver:   nil,
-			expectResolution: false,
+			name:           "missing comparison returns error",
+			resolver:       accountHandleResolverStub{},
+			snapshot:       server.ComparisonSnapshot{},
+			expectedStatus: http.StatusBadRequest,
+			expectedError:  "comparison is not ready; upload two archives first",
 		},
 	}
 
 	for _, testCase := range testCases {
 		testCase := testCase
 		t.Run(testCase.name, func(t *testing.T) {
-			store := newResolvingStoreStub()
 			router, err := server.NewRouter(server.RouterConfig{
-				Store:          store,
-				HandleResolver: testCase.handleResolver,
+				Store:          staticSnapshotStore{snapshot: testCase.snapshot},
+				HandleResolver: testCase.resolver,
 			})
 			if err != nil {
 				t.Fatalf("NewRouter returned error: %v", err)
 			}
 
-			archiveA := createArchive(t, primaryArchiveContents)
-			archiveB := createArchive(t, secondaryArchiveContents)
-
 			recorder := httptest.NewRecorder()
-			request := newUploadRequest(t, archiveA)
+			request := httptest.NewRequest(http.MethodPost, "/api/compare", nil)
 			router.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusOK {
-				t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
-			}
-			if store.waitForResolveHandles(handleResolutionNoCallTimeout) {
-				t.Fatalf("handle resolution triggered before comparison was ready")
+			if recorder.Code != testCase.expectedStatus {
+				t.Fatalf("expected status %d, got %d", testCase.expectedStatus, recorder.Code)
 			}
 
-			recorder = httptest.NewRecorder()
-			request = newUploadRequest(t, archiveB)
-			router.ServeHTTP(recorder, request)
-			if recorder.Code != http.StatusOK {
-				t.Fatalf("expected status %d, got %d", http.StatusOK, recorder.Code)
+			var response uploadErrorResponse
+			if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+				t.Fatalf("decode error response: %v", err)
 			}
-
-			if testCase.expectResolution {
-				if !store.waitForResolveHandles(handleResolutionWaitDuration) {
-					t.Fatalf("expected handle resolution to be triggered")
-				}
-			} else {
-				if store.waitForResolveHandles(handleResolutionNoCallTimeout) {
-					t.Fatalf("did not expect handle resolution to be triggered")
-				}
+			if !strings.Contains(response.Error, testCase.expectedError) {
+				t.Fatalf("expected error message to contain %q, got %q", testCase.expectedError, response.Error)
 			}
 		})
 	}
 }
 
+func TestComparisonTaskProgress(t *testing.T) {
+	const (
+		accountIDFirst  = "100"
+		accountIDSecond = "200"
+		expectedTotal   = 2
+	)
+
+	comparisonData := &server.ComparisonData{
+		AccountSetsA: matrix.AccountSets{Followers: map[string]matrix.AccountRecord{accountIDFirst: {AccountID: accountIDFirst}}},
+		AccountSetsB: matrix.AccountSets{Followers: map[string]matrix.AccountRecord{accountIDSecond: {AccountID: accountIDSecond}}},
+		OwnerA:       matrix.OwnerIdentity{AccountID: "1"},
+		OwnerB:       matrix.OwnerIdentity{AccountID: "2"},
+		FileNameA:    "a.zip",
+		FileNameB:    "b.zip",
+	}
+
+	store := staticSnapshotStore{snapshot: server.ComparisonSnapshot{ComparisonData: comparisonData}}
+	resolver := newHandleResolutionRecorder(map[string]handles.Result{
+		accountIDFirst:  {Record: handles.AccountRecord{AccountID: accountIDFirst, UserName: "first_user"}},
+		accountIDSecond: {Record: handles.AccountRecord{AccountID: accountIDSecond, UserName: "second_user"}},
+	})
+
+	router, err := server.NewRouter(server.RouterConfig{Store: store, HandleResolver: resolver})
+	if err != nil {
+		t.Fatalf("NewRouter returned error: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/compare", nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, recorder.Code)
+	}
+
+	var taskResponse compareTaskResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &taskResponse); err != nil {
+		t.Fatalf("decode task response: %v", err)
+	}
+	if taskResponse.TaskID == "" {
+		t.Fatalf("expected task identifier to be set")
+	}
+	if taskResponse.Total != expectedTotal {
+		t.Fatalf("expected total %d, got %d", expectedTotal, taskResponse.Total)
+	}
+
+	progress := waitForComparisonTask(t, router, taskResponse.TaskID)
+	if progress.Status != "completed" {
+		t.Fatalf("expected task status completed, got %s", progress.Status)
+	}
+	if progress.Completed != expectedTotal {
+		t.Fatalf("expected completed count %d, got %d", expectedTotal, progress.Completed)
+	}
+	if len(progress.Errors) != 0 {
+		t.Fatalf("expected no resolution errors, got %v", progress.Errors)
+	}
+}
+
 func TestComparisonUsesResolvedHandlesForBlockedOnlyAccounts(t *testing.T) {
 	const (
-		ownerAccountIDA             = "1"
-		ownerAccountIDB             = "2"
-		followingAccountIDA         = "10"
-		followerAccountIDA          = "11"
-		blockedAccountIDA           = "100"
-		blockedUserNameA            = "blocked_handle_a"
-		blockedDisplayNameA         = "Blocked Name A"
-		followingAccountIDB         = "20"
-		followerAccountIDB          = "21"
-		blockedAccountIDB           = "200"
-		blockedUserNameB            = "blocked_handle_b"
-		blockedDisplayNameB         = "Blocked Name B"
-		expectedStatusCodeOK        = http.StatusOK
-		comparisonPollingIterations = 10
-		comparisonPollingDelay      = 50 * time.Millisecond
+		ownerAccountIDA      = "1"
+		ownerAccountIDB      = "2"
+		followingAccountIDA  = "10"
+		followerAccountIDA   = "11"
+		blockedAccountIDA    = "100"
+		blockedUserNameA     = "blocked_handle_a"
+		blockedDisplayNameA  = "Blocked Name A"
+		followingAccountIDB  = "20"
+		followerAccountIDB   = "21"
+		blockedAccountIDB    = "200"
+		blockedUserNameB     = "blocked_handle_b"
+		blockedDisplayNameB  = "Blocked Name B"
+		expectedStatusCodeOK = http.StatusOK
 	)
 
 	service := &matrixComparisonServiceRecorder{}
@@ -506,37 +489,41 @@ func TestComparisonUsesResolvedHandlesForBlockedOnlyAccounts(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", expectedStatusCodeOK, recorder.Code)
 	}
 
-	if !resolver.waitForCall(handleResolutionWaitDuration) {
-		t.Fatalf("expected handle resolution to be triggered")
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodPost, "/api/compare", nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("expected status %d, got %d", http.StatusAccepted, recorder.Code)
 	}
 
-	var (
-		comparison matrix.ComparisonResult
-		resolved   bool
-	)
-
-	for attempt := 0; attempt < comparisonPollingIterations; attempt++ {
-		recorder = httptest.NewRecorder()
-		request = httptest.NewRequest(http.MethodGet, "/", nil)
-		router.ServeHTTP(recorder, request)
-		if recorder.Code != expectedStatusCodeOK {
-			t.Fatalf("expected status %d, got %d", expectedStatusCodeOK, recorder.Code)
-		}
-		comparison = service.LatestComparison()
-
-		blockedRecordA, foundA := findAccountRecordByID(comparison.OwnerABlockedAll, blockedAccountIDA)
-		blockedRecordB, foundB := findAccountRecordByID(comparison.OwnerBBlockedAll, blockedAccountIDB)
-		if foundA && foundB &&
-			blockedRecordA.DisplayName == blockedDisplayNameA && blockedRecordA.UserName == blockedUserNameA &&
-			blockedRecordB.DisplayName == blockedDisplayNameB && blockedRecordB.UserName == blockedUserNameB {
-			resolved = true
-			break
-		}
-		time.Sleep(comparisonPollingDelay)
+	var taskResponse compareTaskResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &taskResponse); err != nil {
+		t.Fatalf("decode task response: %v", err)
+	}
+	progress := waitForComparisonTask(t, router, taskResponse.TaskID)
+	if progress.Status != "completed" {
+		t.Fatalf("expected task status completed, got %s", progress.Status)
 	}
 
-	if !resolved {
-		t.Fatalf("blocked accounts did not resolve to handles")
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/", nil)
+	router.ServeHTTP(recorder, request)
+	if recorder.Code != expectedStatusCodeOK {
+		t.Fatalf("expected status %d, got %d", expectedStatusCodeOK, recorder.Code)
+	}
+
+	comparison := service.LatestComparison()
+
+	blockedRecordA, foundA := findAccountRecordByID(comparison.OwnerABlockedAll, blockedAccountIDA)
+	blockedRecordB, foundB := findAccountRecordByID(comparison.OwnerBBlockedAll, blockedAccountIDB)
+	if !foundA || !foundB {
+		t.Fatalf("expected blocked records for both owners")
+	}
+	if blockedRecordA.DisplayName != blockedDisplayNameA || blockedRecordA.UserName != blockedUserNameA {
+		t.Fatalf("unexpected owner A blocked metadata: %+v", blockedRecordA)
+	}
+	if blockedRecordB.DisplayName != blockedDisplayNameB || blockedRecordB.UserName != blockedUserNameB {
+		t.Fatalf("unexpected owner B blocked metadata: %+v", blockedRecordB)
 	}
 
 	testCases := []struct {
@@ -631,6 +618,49 @@ type uploadResponse struct {
 
 type uploadErrorResponse struct {
 	Error string `json:"error"`
+}
+
+type compareTaskResponse struct {
+	TaskID string `json:"taskID"`
+	Total  int    `json:"total"`
+}
+
+type compareProgressResponse struct {
+	TaskID    string            `json:"taskID"`
+	Total     int               `json:"total"`
+	Completed int               `json:"completed"`
+	Status    string            `json:"status"`
+	Errors    map[string]string `json:"errors"`
+}
+
+func waitForComparisonTask(t *testing.T, handler http.Handler, taskID string) compareProgressResponse {
+	t.Helper()
+	const (
+		maxAttempts         = 50
+		pollInterval        = 20 * time.Millisecond
+		terminalStatus      = "completed"
+		terminalErrorStatus = "failed"
+	)
+
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, fmt.Sprintf("/api/compare/%s", taskID), nil)
+		handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("unexpected progress status %d: %s", recorder.Code, recorder.Body.String())
+		}
+
+		var progress compareProgressResponse
+		if err := json.Unmarshal(recorder.Body.Bytes(), &progress); err != nil {
+			t.Fatalf("decode progress response: %v", err)
+		}
+		if progress.Status == terminalStatus || progress.Status == terminalErrorStatus {
+			return progress
+		}
+		time.Sleep(pollInterval)
+	}
+	t.Fatalf("comparison task %s did not complete", taskID)
+	return compareProgressResponse{}
 }
 
 func findAccountRecordByID(records []matrix.AccountRecord, accountID string) (matrix.AccountRecord, bool) {
