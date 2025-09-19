@@ -1,319 +1,271 @@
-// cmd/cresolve/main.go
 package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
-	"io"
-	"math/rand"
 	"os"
-	"os/exec"
 	"os/signal"
-	"regexp"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/f-sync/fsync/internal/cresolver"
 	"github.com/f-sync/fsync/internal/handles"
 )
 
 const (
-	defaultChromeBinaryPath = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	defaultChromeBinaryPath         = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+	usageHeader                     = "usage:"
+	usageSingleID                   = "  cresolve <numeric_id>"
+	usageCSVCommand                 = "  cresolve -csv <id1> <id2> ..."
+	usageJSONCommand                = "  cat ids.txt | cresolve -json"
+	chromeBinaryEnvironmentVariable = "CHROME_BIN"
+	csvHeaderIdentifier             = "id"
+	csvHeaderHandle                 = "handle"
+	csvHeaderDisplayName            = "display_name"
+	errMessageReadIdentifiers       = "stdin read error"
+	errMessageOutputFormatConflict  = "cannot specify both -csv and -json"
+	errMessageCreateService         = "create resolver service"
+	errMessageResolveIdentifiers    = "resolve account identifiers"
+	errMessageWriteCSV              = "write CSV output"
 )
 
-var (
-	// HTTPS-only: matches full profile URLs we later strip to a handle
-	profileURLRegex = regexp.MustCompile(`https://(?:x|twitter)\.com/[A-Za-z0-9_]{1,15}`)
+var disabledChromeRequestDelay = -1 * time.Millisecond
 
-	// Reserved top-level paths to exclude as “handles”
-	reservedTopLevelPaths = map[string]struct{}{
-		"i": {}, "intent": {}, "home": {}, "tos": {}, "privacy": {}, "explore": {},
-		"notifications": {}, "settings": {}, "login": {}, "signup": {}, "share": {},
-		"account": {}, "compose": {}, "messages": {}, "search": {},
-	}
+type outputFormat string
 
-	// Meta extraction (we normalize quotes ' → " before applying these)
-	metaOGTitle  = regexp.MustCompile(`property="og:title"[^>]*content="([^"]+)"`)
-	metaTitleTag = regexp.MustCompile(`<title[^>]*>([^<]+)</title>`)
-
-	uaPool = []string{
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
-		"Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.850.0 Safari/537.36",
-	}
+const (
+	outputFormatText outputFormat = "text"
+	outputFormatCSV  outputFormat = "csv"
+	outputFormatJSON outputFormat = "json"
 )
 
-type profileInfo struct {
-	ID          string `json:"id"`
+type profileOutput struct {
+	Identifier  string `json:"id"`
 	Handle      string `json:"handle"`
 	DisplayName string `json:"display_name"`
-	FromURL     string `json:"from_url"`
-	Err         string `json:"error,omitempty"`
+	SourceURL   string `json:"from_url"`
+	Error       string `json:"error,omitempty"`
+}
+
+type cliOptions struct {
+	outputFormat      outputFormat
+	chromeBinaryPath  string
+	virtualTimeBudget time.Duration
+	accountTimeout    time.Duration
+	requestDelay      time.Duration
+	requestJitter     time.Duration
+	burstSize         int
+	burstRest         time.Duration
+	burstRestJitter   time.Duration
 }
 
 func main() {
-	flagCSV := flag.Bool("csv", false, "output CSV: id,handle,display_name")
-	flagJSON := flag.Bool("json", false, "output JSON lines")
-	flagChrome := flag.String("chrome", defaultChromePath(), "path to Chrome/Chromium binary (or set CHROME_BIN)")
-	flagVT := flag.Int("vtbudget", 15000, "Chrome virtual time budget (ms)")
-	flagTimeout := flag.Duration("timeout", 30*time.Second, "per-ID timeout")
-	flagDelay := flag.Duration("delay", 500*time.Millisecond, "base delay between requests")
-	flagJitter := flag.Duration("jitter", 0, "add uniform jitter in [-jitter,+jitter] to each delay (e.g. 300ms)")
-	flagBurstSize := flag.Int("burst-size", 0, "number of requests per burst (0 disables bursting)")
-	flagBurstRest := flag.Duration("burst-rest", 0, "rest duration after each burst (e.g. 5s)")
-	flagBurstJitter := flag.Duration("burst-jitter", 0, "jitter for burst rest in [-burst-jitter,+burst-jitter]")
-	flag.Parse()
-
-	chromeBinaryPath := os.Getenv("CHROME_BIN")
-	if chromeBinaryPath == "" {
-		chromeBinaryPath = *flagChrome
-	}
-
-	ids := collectIDs(flag.Args())
+	options, ids := parseArguments()
 	if len(ids) == 0 {
-		sc := bufio.NewScanner(os.Stdin)
-		for sc.Scan() {
-			if s := strings.TrimSpace(sc.Text()); s != "" {
-				ids = append(ids, s)
-			}
-		}
-		if err := sc.Err(); err != nil {
-			fmt.Fprintln(os.Stderr, "stdin read error:", err)
-			os.Exit(2)
-		}
-	}
-	if len(ids) == 0 {
-		fmt.Fprintln(os.Stderr, "usage:")
-		fmt.Fprintln(os.Stderr, "  cresolve <numeric_id>")
-		fmt.Fprintln(os.Stderr, "  cresolve -csv <id1> <id2> ...")
-		fmt.Fprintln(os.Stderr, "  cat ids.txt | cresolve -json")
+		printUsage()
 		os.Exit(2)
 	}
 
-	rand.Seed(time.Now().UnixNano())
+	serviceConfig := cresolver.Config{
+		Handles: handles.Config{
+			ChromeBinaryPath:        options.chromeBinaryPath,
+			ChromeUserAgent:         handles.DefaultChromeUserAgent(nil),
+			ChromeVirtualTimeBudget: options.virtualTimeBudget,
+			ChromeRequestDelay:      disabledChromeRequestDelay,
+		},
+		AccountTimeout: options.accountTimeout,
+		RequestPacing: cresolver.RequestPacingConfig{
+			BaseDelay:       options.requestDelay,
+			Jitter:          options.requestJitter,
+			BurstSize:       options.burstSize,
+			BurstRest:       options.burstRest,
+			BurstRestJitter: options.burstRestJitter,
+		},
+	}
 
-	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	resolverService, serviceErr := cresolver.NewService(serviceConfig)
+	if serviceErr != nil {
+		fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageCreateService, serviceErr)
+		os.Exit(1)
+	}
+
+	applicationContext, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// CSV writer if needed — write header ONCE
-	var csvWriter *csv.Writer
-	if *flagCSV {
-		csvWriter = csv.NewWriter(os.Stdout)
-		_ = csvWriter.Write([]string{"id", "handle", "display_name"})
+	resolutions, resolveErr := resolverService.ResolveBatch(applicationContext, cresolver.Request{AccountIDs: ids})
+
+	csvWriter := initializeCSVWriter(options.outputFormat)
+	jsonEncoder := initializeJSONEncoder(options.outputFormat)
+
+	for _, resolution := range resolutions {
+		output := profileOutput{
+			Identifier:  resolution.AccountID,
+			Handle:      resolution.Record.UserName,
+			DisplayName: resolution.Record.DisplayName,
+			SourceURL:   resolution.IntentURL,
+		}
+		if resolution.Err != nil {
+			output.Error = resolution.Err.Error()
+		}
+
+		switch options.outputFormat {
+		case outputFormatCSV:
+			if csvWriter != nil {
+				_ = csvWriter.Write([]string{output.Identifier, output.Handle, output.DisplayName})
+			}
+		case outputFormatJSON:
+			if jsonEncoder != nil {
+				_ = jsonEncoder.Encode(output)
+			}
+		default:
+			emitTextOutput(output)
+		}
+	}
+
+	if csvWriter != nil {
 		csvWriter.Flush()
+		if err := csvWriter.Error(); err != nil {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageWriteCSV, err)
+			os.Exit(1)
+		}
 	}
 
-	processed := 0
-	for _, id := range ids {
-		select {
-		case <-rootCtx.Done():
-			return
-		default:
+	if resolveErr != nil {
+		if !errors.Is(resolveErr, context.Canceled) {
+			fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageResolveIdentifiers, resolveErr)
 		}
-
-		perIDCtx, perCancel := context.WithTimeout(rootCtx, *flagTimeout)
-		info := resolveOne(perIDCtx, chromeBinaryPath, *flagVT, id)
-		perCancel()
-
-		switch {
-		case *flagJSON:
-			enc := json.NewEncoder(os.Stdout)
-			_ = enc.Encode(info)
-		case *flagCSV:
-			_ = csvWriter.Write([]string{info.ID, info.Handle, info.DisplayName})
-			csvWriter.Flush()
-		default:
-			if info.Handle != "" {
-				fmt.Printf("%s: %s (retrieved from %s)\n", info.ID, info.Handle, info.FromURL)
-				if info.DisplayName != "" {
-					fmt.Printf("  name: %s\n", info.DisplayName)
-				}
-			} else {
-				fmt.Printf("%s:\n", info.ID)
-				if info.Err != "" {
-					fmt.Printf("  err:  %s\n", info.Err)
-				}
-			}
-		}
-
-		processed++
-
-		// Per-request pacing with jitter
-		sleep := jitterDuration(*flagDelay, *flagJitter)
-		if sleep > 0 {
-			select {
-			case <-time.After(sleep):
-			case <-rootCtx.Done():
-				return
-			}
-		}
-
-		// Burst rest (after each completed burst)
-		if *flagBurstSize > 0 && processed%*flagBurstSize == 0 {
-			rest := jitterDuration(*flagBurstRest, *flagBurstJitter)
-			if rest > 0 {
-				select {
-				case <-time.After(rest):
-				case <-rootCtx.Done():
-					return
-				}
-			}
-		}
+		os.Exit(1)
 	}
 }
 
-func resolveOne(ctx context.Context, chromeBinaryPath string, vtBudgetMS int, id string) profileInfo {
-	intentURL := "https://x.com/intent/user?user_id=" + id
-	userAgent := handles.DefaultChromeUserAgent(nil)
+func parseArguments() (cliOptions, []string) {
+	csvFlag := flag.Bool("csv", false, "output CSV: id,handle,display_name")
+	jsonFlag := flag.Bool("json", false, "output JSON lines")
+	chromeFlag := flag.String("chrome", defaultChromeBinaryPath, "path to Chrome/Chromium binary (or set CHROME_BIN)")
+	virtualTimeBudgetFlag := flag.Int("vtbudget", 15000, "Chrome virtual time budget (ms)")
+	timeoutFlag := flag.Duration("timeout", 30*time.Second, "per-ID timeout")
+	delayFlag := flag.Duration("delay", 500*time.Millisecond, "base delay between requests")
+	jitterFlag := flag.Duration("jitter", 0, "add uniform jitter in [-jitter,+jitter] to each delay (e.g. 300ms)")
+	burstSizeFlag := flag.Int("burst-size", 0, "number of requests per burst (0 disables bursting)")
+	burstRestFlag := flag.Duration("burst-rest", 0, "rest duration after each burst (e.g. 5s)")
+	burstRestJitterFlag := flag.Duration("burst-jitter", 0, "jitter for burst rest in [-burst-jitter,+burst-jitter]")
+	flag.Parse()
 
-	htmlDoc, err := renderWithHeadlessChrome(ctx, chromeBinaryPath, userAgent, vtBudgetMS, intentURL)
-	if err != nil || strings.TrimSpace(htmlDoc) == "" {
-		msg := ""
+	output := determineOutputFormat(*csvFlag, *jsonFlag)
+
+	chromeBinaryPath := os.Getenv(chromeBinaryEnvironmentVariable)
+	if strings.TrimSpace(chromeBinaryPath) == "" {
+		chromeBinaryPath = *chromeFlag
+	}
+
+	options := cliOptions{
+		outputFormat:      output,
+		chromeBinaryPath:  chromeBinaryPath,
+		virtualTimeBudget: time.Duration(*virtualTimeBudgetFlag) * time.Millisecond,
+		accountTimeout:    *timeoutFlag,
+		requestDelay:      *delayFlag,
+		requestJitter:     *jitterFlag,
+		burstSize:         *burstSizeFlag,
+		burstRest:         *burstRestFlag,
+		burstRestJitter:   *burstRestJitterFlag,
+	}
+
+	identifiers := collectIdentifiers(flag.Args())
+	if len(identifiers) == 0 {
+		stdinIdentifiers, err := readIdentifiersFromStdin()
 		if err != nil {
-			msg = err.Error()
+			fmt.Fprintf(os.Stderr, "%s: %v\n", errMessageReadIdentifiers, err)
+			os.Exit(2)
 		}
-		return profileInfo{ID: id, FromURL: intentURL, Err: msg}
+		identifiers = stdinIdentifiers
 	}
-
-	normalized := strings.ReplaceAll(htmlDoc, `'`, `"`)
-	handle := extractHandle(normalized)
-	display := extractDisplayName(normalized, handle)
-
-	return profileInfo{
-		ID:          id,
-		Handle:      handle,
-		DisplayName: display,
-		FromURL:     intentURL,
-	}
+	return options, identifiers
 }
 
-func renderWithHeadlessChrome(ctx context.Context, chromeBinaryPath, userAgent string, vtBudgetMS int, targetPageURL string) (string, error) {
-	args := []string{
-		"--headless=new",
-		"--disable-gpu",
-		"--use-gl=swiftshader",
-		"--enable-unsafe-swiftshader",
-		"--hide-scrollbars",
-		"--no-first-run",
-		"--no-default-browser-check",
-		"--log-level=3",
-		"--silent",
-		"--disable-logging",
-		"--user-agent=" + userAgent,
-		fmt.Sprintf("--virtual-time-budget=%d", vtBudgetMS),
-		"--dump-dom",
-		targetPageURL,
+func determineOutputFormat(csvRequested bool, jsonRequested bool) outputFormat {
+	if csvRequested && jsonRequested {
+		fmt.Fprintln(os.Stderr, errMessageOutputFormatConflict)
+		os.Exit(2)
 	}
-	cmd := exec.CommandContext(ctx, chromeBinaryPath, args...)
-	var stdout bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = io.Discard
-
-	if err := cmd.Start(); err != nil {
-		return "", err
+	if csvRequested {
+		return outputFormatCSV
 	}
+	if jsonRequested {
+		return outputFormatJSON
+	}
+	return outputFormatText
+}
 
-	waitCh := make(chan error, 1)
-	go func() { waitCh <- cmd.Wait() }()
-
-	select {
-	case <-ctx.Done():
-		_ = cmd.Process.Kill()
-		<-waitCh
-		return "", ctx.Err()
-	case err := <-waitCh:
-		if err != nil {
-			return "", err
+func collectIdentifiers(arguments []string) []string {
+	identifiers := make([]string, 0, len(arguments))
+	for _, argument := range arguments {
+		trimmed := strings.TrimSpace(argument)
+		if trimmed == "" {
+			continue
 		}
-		return stdout.String(), nil
+		identifiers = append(identifiers, trimmed)
 	}
+	return identifiers
 }
 
-func extractHandle(htmlDoc string) string {
-	for _, full := range profileURLRegex.FindAllString(htmlDoc, -1) {
-		h := stripDomainPrefix(full)
-		if !isReserved(h) {
-			return h
+func readIdentifiersFromStdin() ([]string, error) {
+	scanner := bufio.NewScanner(os.Stdin)
+	identifiers := []string{}
+	for scanner.Scan() {
+		trimmed := strings.TrimSpace(scanner.Text())
+		if trimmed == "" {
+			continue
 		}
+		identifiers = append(identifiers, trimmed)
 	}
-	return ""
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+	return identifiers, nil
 }
 
-func extractDisplayName(htmlDoc string, handle string) string {
-	title := firstGroup(metaOGTitle.FindStringSubmatch(htmlDoc))
-	if title == "" {
-		title = firstGroup(metaTitleTag.FindStringSubmatch(htmlDoc))
+func initializeCSVWriter(format outputFormat) *csv.Writer {
+	if format != outputFormatCSV {
+		return nil
 	}
-	if title == "" {
-		return ""
-	}
-	if idx := strings.Index(title, "(@"); idx > 0 {
-		return strings.TrimSpace(title[:idx])
-	}
-	name := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(title, " / X"), " on X"))
-	if handle != "" {
-		name = strings.ReplaceAll(name, "(@"+handle+")", "")
-		name = strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(name, " / X"), " on X"))
-	}
-	return strings.TrimSpace(name)
+	writer := csv.NewWriter(os.Stdout)
+	_ = writer.Write([]string{csvHeaderIdentifier, csvHeaderHandle, csvHeaderDisplayName})
+	writer.Flush()
+	return writer
 }
 
-func stripDomainPrefix(fullURL string) string {
-	fullURL = strings.TrimPrefix(fullURL, "https://")
-	if i := strings.IndexByte(fullURL, '/'); i >= 0 {
-		return fullURL[i+1:]
+func initializeJSONEncoder(format outputFormat) *json.Encoder {
+	if format != outputFormatJSON {
+		return nil
 	}
-	return fullURL
+	encoder := json.NewEncoder(os.Stdout)
+	encoder.SetEscapeHTML(false)
+	return encoder
 }
 
-func isReserved(handle string) bool {
-	_, bad := reservedTopLevelPaths[strings.ToLower(handle)]
-	return bad
-}
-
-func firstGroup(m []string) string {
-	if len(m) >= 2 {
-		return m[1]
-	}
-	return ""
-}
-
-func collectIDs(args []string) []string {
-	var out []string
-	for _, a := range args {
-		if s := strings.TrimSpace(a); s != "" {
-			out = append(out, s)
+func emitTextOutput(output profileOutput) {
+	if output.Handle != "" {
+		fmt.Printf("%s: %s (retrieved from %s)\n", output.Identifier, output.Handle, output.SourceURL)
+		if output.DisplayName != "" {
+			fmt.Printf("  name: %s\n", output.DisplayName)
+		}
+	} else {
+		fmt.Printf("%s:\n", output.Identifier)
+		if output.Error != "" {
+			fmt.Printf("  err:  %s\n", output.Error)
 		}
 	}
-	return out
 }
 
-func defaultChromePath() string {
-	if v := os.Getenv("CHROME_BIN"); v != "" {
-		return v
-	}
-	return defaultChromeBinaryPath
-}
-
-// jitterDuration returns a duration ≈ base + U[-jitter, +jitter], clamped at 0.
-func jitterDuration(base time.Duration, jitter time.Duration) time.Duration {
-	if base < 0 {
-		base = 0
-	}
-	if jitter <= 0 {
-		return base
-	}
-	// rand.Float64 in [-1,+1]
-	offset := (rand.Float64()*2 - 1) * float64(jitter)
-	d := time.Duration(float64(base) + offset)
-	if d < 0 {
-		return 0
-	}
-	return d
+func printUsage() {
+	fmt.Fprintln(os.Stderr, usageHeader)
+	fmt.Fprintln(os.Stderr, usageSingleID)
+	fmt.Fprintln(os.Stderr, usageCSVCommand)
+	fmt.Fprintln(os.Stderr, usageJSONCommand)
 }
