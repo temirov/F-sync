@@ -2,12 +2,15 @@ package tests
 
 import (
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -58,6 +61,13 @@ const (
 	serverIntegrationUnexpectedReadyStateFormat      = "expected comparisonReady=%t after %s archive upload; got %t"
 	serverIntegrationFirstUploadLabel                = "first"
 	serverIntegrationSecondUploadLabel               = "second"
+
+	integrationSkipMessageFormat      = "%s: %v"
+	integrationChromeEmptyPathMessage = "resolved empty chrome binary path"
+
+	integrationAccountIDElon           = "44196397"
+	integrationExpectedHandleElon      = "elonmusk"
+	integrationExpectedDisplayNameElon = "Elon Musk"
 )
 
 // serverIntegrationRunFlag enables TestServerHandleResolutionIntegration, which performs live handle resolution
@@ -291,4 +301,23 @@ func TestServerHandleResolutionIntegration(t *testing.T) {
 			}
 		})
 	}
+}
+
+func resolveChromeBinaryPathForIntegration() (string, error) {
+	resolvedPath := handles.ResolveChromeBinaryPath(handles.Config{})
+	trimmedPath := strings.TrimSpace(resolvedPath)
+	if trimmedPath == "" {
+		return "", errors.New(integrationChromeEmptyPathMessage)
+	}
+	if strings.ContainsRune(trimmedPath, os.PathSeparator) {
+		if _, statErr := os.Stat(trimmedPath); statErr != nil {
+			return "", statErr
+		}
+		return trimmedPath, nil
+	}
+	lookedPath, lookErr := exec.LookPath(trimmedPath)
+	if lookErr != nil {
+		return "", lookErr
+	}
+	return lookedPath, nil
 }
