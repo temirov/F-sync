@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/f-sync/fsync/internal/handles"
+	"github.com/f-sync/fsync/internal/cresolver"
 	"github.com/f-sync/fsync/internal/server"
 )
 
@@ -76,7 +76,7 @@ func runServerCommand(*cobra.Command, []string) error {
 	}()
 
 	logger.Info(logMessageResolverInitialization)
-	resolver, resolverErr := handles.NewResolver(handles.Config{})
+	resolver, resolverErr := cresolver.NewService(cresolver.Config{})
 	if resolverErr != nil {
 		return fmt.Errorf("%s: %w", errMessageResolverCreate, resolverErr)
 	}
