@@ -32,8 +32,16 @@ func ResolveHandles(ctx context.Context, resolver AccountHandleResolver, account
 		if accountSet == nil {
 			continue
 		}
-		collectResolutionTargets(accountSet.Followers, accountIDTargets)
-		collectResolutionTargets(accountSet.Following, accountIDTargets)
+		collectRecordResolutionTargets(accountSet.Followers, accountIDTargets)
+		collectRecordResolutionTargets(accountSet.Following, accountIDTargets)
+		if len(accountSet.Muted) > 0 {
+			ensureAccountRecordMap(&accountSet.MutedRecords)
+			collectFlagResolutionTargets(accountSet.Muted, accountSet.MutedRecords, accountIDTargets)
+		}
+		if len(accountSet.Blocked) > 0 {
+			ensureAccountRecordMap(&accountSet.BlockedRecords)
+			collectFlagResolutionTargets(accountSet.Blocked, accountSet.BlockedRecords, accountIDTargets)
+		}
 	}
 	if len(accountIDTargets) == 0 {
 		return nil
@@ -69,8 +77,27 @@ func ResolveHandles(ctx context.Context, resolver AccountHandleResolver, account
 	return errorsByAccountID
 }
 
-func collectResolutionTargets(source map[string]AccountRecord, targets map[string][]accountResolutionTarget) {
+func collectRecordResolutionTargets(source map[string]AccountRecord, targets map[string][]accountResolutionTarget) {
 	for accountID := range source {
 		targets[accountID] = append(targets[accountID], accountResolutionTarget{records: source})
+	}
+}
+
+func collectFlagResolutionTargets(flags map[string]bool, records map[string]AccountRecord, targets map[string][]accountResolutionTarget) {
+	for accountID := range flags {
+		record, exists := records[accountID]
+		if !exists {
+			records[accountID] = AccountRecord{AccountID: accountID}
+		} else if record.AccountID == "" {
+			record.AccountID = accountID
+			records[accountID] = record
+		}
+		targets[accountID] = append(targets[accountID], accountResolutionTarget{records: records})
+	}
+}
+
+func ensureAccountRecordMap(records *map[string]AccountRecord) {
+	if *records == nil {
+		*records = map[string]AccountRecord{}
 	}
 }

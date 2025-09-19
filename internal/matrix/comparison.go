@@ -88,28 +88,9 @@ func recordSortKey(record AccountRecord) string {
 
 func resolveBlockedAccounts(ownerAccountSets AccountSets, accountSetsOwnerA AccountSets, accountSetsOwnerB AccountSets) []AccountRecord {
 	var blockedRecords []AccountRecord
+	recordSources := blockedRecordSources(ownerAccountSets, accountSetsOwnerA, accountSetsOwnerB)
 	for accountID := range ownerAccountSets.Blocked {
-		if record, found := ownerAccountSets.Following[accountID]; found {
-			blockedRecords = append(blockedRecords, record)
-			continue
-		}
-		if record, found := ownerAccountSets.Followers[accountID]; found {
-			blockedRecords = append(blockedRecords, record)
-			continue
-		}
-		if record, found := accountSetsOwnerA.Following[accountID]; found {
-			blockedRecords = append(blockedRecords, record)
-			continue
-		}
-		if record, found := accountSetsOwnerA.Followers[accountID]; found {
-			blockedRecords = append(blockedRecords, record)
-			continue
-		}
-		if record, found := accountSetsOwnerB.Following[accountID]; found {
-			blockedRecords = append(blockedRecords, record)
-			continue
-		}
-		if record, found := accountSetsOwnerB.Followers[accountID]; found {
+		if record, found := findAccountRecord(accountID, recordSources); found {
 			blockedRecords = append(blockedRecords, record)
 			continue
 		}
@@ -128,4 +109,29 @@ func intersectBlockedWithRecords(ownerAccountSets AccountSets, recordSet map[str
 	}
 	sortAccountRecords(blockedIntersection)
 	return blockedIntersection
+}
+
+// blockedRecordSources returns the ordered record maps that may describe blocked identifiers.
+func blockedRecordSources(ownerAccountSets AccountSets, accountSetsOwnerA AccountSets, accountSetsOwnerB AccountSets) []map[string]AccountRecord {
+	return []map[string]AccountRecord{
+		ownerAccountSets.Following,
+		ownerAccountSets.Followers,
+		ownerAccountSets.BlockedRecords,
+		accountSetsOwnerA.Following,
+		accountSetsOwnerA.Followers,
+		accountSetsOwnerA.BlockedRecords,
+		accountSetsOwnerB.Following,
+		accountSetsOwnerB.Followers,
+		accountSetsOwnerB.BlockedRecords,
+	}
+}
+
+// findAccountRecord searches the provided sources for the first record describing the identifier.
+func findAccountRecord(accountID string, sources []map[string]AccountRecord) (AccountRecord, bool) {
+	for _, source := range sources {
+		if record, exists := source[accountID]; exists {
+			return record, true
+		}
+	}
+	return AccountRecord{}, false
 }
