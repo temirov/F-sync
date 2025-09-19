@@ -27,16 +27,26 @@ const (
 )
 
 var (
+	// HTTPS-only: matches full profile URLs we later strip to a handle
 	profileURLRegex = regexp.MustCompile(`https://(?:x|twitter)\.com/[A-Za-z0-9_]{1,15}`)
 
+	// Reserved top-level paths to exclude as “handles”
 	reservedTopLevelPaths = map[string]struct{}{
 		"i": {}, "intent": {}, "home": {}, "tos": {}, "privacy": {}, "explore": {},
 		"notifications": {}, "settings": {}, "login": {}, "signup": {}, "share": {},
 		"account": {}, "compose": {}, "messages": {}, "search": {},
 	}
 
+	// Meta extraction (we normalize quotes ' → " before applying these)
 	metaOGTitle  = regexp.MustCompile(`property="og:title"[^>]*content="([^"]+)"`)
 	metaTitleTag = regexp.MustCompile(`<title[^>]*>([^<]+)</title>`)
+
+	uaPool = []string{
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5_0) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
+		"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
+		"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.846.0 Safari/537.36",
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 13_6_1) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.850.0 Safari/537.36",
+	}
 )
 
 type profileInfo struct {
@@ -53,7 +63,11 @@ func main() {
 	flagChrome := flag.String("chrome", defaultChromePath(), "path to Chrome/Chromium binary (or set CHROME_BIN)")
 	flagVT := flag.Int("vtbudget", 15000, "Chrome virtual time budget (ms)")
 	flagTimeout := flag.Duration("timeout", 30*time.Second, "per-ID timeout")
-	flagDelay := flag.Duration("delay", 500*time.Millisecond, "fixed delay between requests")
+	flagDelay := flag.Duration("delay", 500*time.Millisecond, "base delay between requests")
+	flagJitter := flag.Duration("jitter", 0, "add uniform jitter in [-jitter,+jitter] to each delay (e.g. 300ms)")
+	flagBurstSize := flag.Int("burst-size", 0, "number of requests per burst (0 disables bursting)")
+	flagBurstRest := flag.Duration("burst-rest", 0, "rest duration after each burst (e.g. 5s)")
+	flagBurstJitter := flag.Duration("burst-jitter", 0, "jitter for burst rest in [-burst-jitter,+burst-jitter]")
 	flag.Parse()
 
 	chromeBinaryPath := os.Getenv("CHROME_BIN")
@@ -95,6 +109,7 @@ func main() {
 		csvWriter.Flush()
 	}
 
+	processed := 0
 	for _, id := range ids {
 		select {
 		case <-rootCtx.Done():
@@ -127,10 +142,28 @@ func main() {
 			}
 		}
 
-		select {
-		case <-time.After(*flagDelay):
-		case <-rootCtx.Done():
-			return
+		processed++
+
+		// Per-request pacing with jitter
+		sleep := jitterDuration(*flagDelay, *flagJitter)
+		if sleep > 0 {
+			select {
+			case <-time.After(sleep):
+			case <-rootCtx.Done():
+				return
+			}
+		}
+
+		// Burst rest (after each completed burst)
+		if *flagBurstSize > 0 && processed%*flagBurstSize == 0 {
+			rest := jitterDuration(*flagBurstRest, *flagBurstJitter)
+			if rest > 0 {
+				select {
+				case <-time.After(rest):
+				case <-rootCtx.Done():
+					return
+				}
+			}
 		}
 	}
 }
@@ -266,4 +299,21 @@ func defaultChromePath() string {
 		return v
 	}
 	return defaultChromeBinaryPath
+}
+
+// jitterDuration returns a duration ≈ base + U[-jitter, +jitter], clamped at 0.
+func jitterDuration(base time.Duration, jitter time.Duration) time.Duration {
+	if base < 0 {
+		base = 0
+	}
+	if jitter <= 0 {
+		return base
+	}
+	// rand.Float64 in [-1,+1]
+	offset := (rand.Float64()*2 - 1) * float64(jitter)
+	d := time.Duration(float64(base) + offset)
+	if d < 0 {
+		return 0
+	}
+	return d
 }
