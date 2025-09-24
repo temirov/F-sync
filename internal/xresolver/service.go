@@ -8,6 +8,7 @@ import (
 	"net"
 	neturl "net/url"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,16 +24,13 @@ import (
 const (
 	defaultVirtualTimeBudgetMilliseconds = 15000
 
-	chromeHeadlessFlagKey                             = "headless"
-	chromeHeadlessModeNewValue                        = "new"
-	chromeDisableGPUFlagKey                           = "disable-gpu"
-	chromeDisableGPUStartupFlagKey                    = "disable-gpu-startup"
-	chromeDisableDevShmUsageFlagKey                   = "disable-dev-shm-usage"
-	chromeUseGLFlagKey                                = "use-gl"
-	chromeUseGLSwiftShaderValue                       = "swiftshader"
-	chromeEnableUnsafeSwiftShaderFlag                 = "enable-unsafe-swiftshader"
-	chromeNoSandboxFlagKey                            = "no-sandbox"
-	chromeDisableSetuidSandboxFlagKey                 = "disable-setuid-sandbox"
+	// Headless / GPU
+	chromeHeadlessFlagKey           = "headless"
+	chromeHeadlessModeNewValue      = "new"
+	chromeDisableDevShmUsageFlagKey = "disable-dev-shm-usage"
+	chromeEnableGPUFlagKey          = "enable-gpu"
+
+	// Stealth / noise reduction
 	chromeEnableAutomationFlagKey                     = "enable-automation"
 	chromeDisableBlinkFeaturesFlagKey                 = "disable-blink-features"
 	chromeAutomationControlledBlinkValue              = "AutomationControlled"
@@ -45,70 +43,67 @@ const (
 	chromeSilentFlagKey                               = "silent"
 	chromeDisableLoggingFlagKey                       = "disable-logging"
 	chromeIgnoreCertificateErrorsFlag                 = "ignore-certificate-errors"
-	chromeUserAgentFlagKey                            = "user-agent"
-	chromeVirtualTimeBudgetFlagKey                    = "virtual-time-budget"
-	chromeProxyServerFlagKey                          = "proxy-server"
-	httpsProxyEnvironmentUpper                        = "HTTPS_PROXY"
-	httpsProxyEnvironmentLower                        = "https_proxy"
-	httpProxyEnvironmentUpper                         = "HTTP_PROXY"
-	httpProxyEnvironmentLower                         = "http_proxy"
-	allProxyEnvironmentUpper                          = "ALL_PROXY"
-	allProxyEnvironmentLower                          = "all_proxy"
-	noProxyEnvironmentUpper                           = "NO_PROXY"
-	noProxyEnvironmentLower                           = "no_proxy"
-	chromeSilentLogLevelValue                         = "3"
-	chromeRendererEmptyURLErrorMessage                = "empty url"
-	chromeLogNavigationStartMessage                   = "chromedp navigate: user-agent=%q url=%s"
-	chromeLogNavigationSuccessMessage                 = "chromedp render success: url=%s bytes=%d"
-	chromeLogNavigationErrorMessage                   = "chromedp render failure: url=%s err=%v"
-	chromeLogNetworkRequestMessage                    = "chromedp network request: url=%s"
-	chromeLogNetworkResponseMessage                   = "chromedp network response: url=%s status=%d"
-	chromeLogNetworkFailureMessage                    = "chromedp network failure: url=%s error=%s canceled=%v"
-	chromeLogTargetCrashMessage                       = "chromedp target crashed"
 
-	acceptLanguageHeaderName           = "Accept-Language"
-	acceptLanguageHeaderValue          = "en-US,en;q=0.9"
-	upgradeInsecureRequestsHeaderName  = "Upgrade-Insecure-Requests"
-	upgradeInsecureRequestsHeaderValue = "1"
+	chromeUserAgentFlagKey         = "user-agent"
+	chromeVirtualTimeBudgetFlagKey = "virtual-time-budget"
+	chromeProxyServerFlagKey       = "proxy-server"
 
+	httpsProxyEnvironmentUpper = "HTTPS_PROXY"
+	httpsProxyEnvironmentLower = "https_proxy"
+	httpProxyEnvironmentUpper  = "HTTP_PROXY"
+	httpProxyEnvironmentLower  = "http_proxy"
+	allProxyEnvironmentUpper   = "ALL_PROXY"
+	allProxyEnvironmentLower   = "all_proxy"
+	noProxyEnvironmentUpper    = "NO_PROXY"
+	noProxyEnvironmentLower    = "no_proxy"
+
+	chromeSilentLogLevelValue            = "3"
+	chromeRendererEmptyURLErrorMessage   = "empty url"
+	chromeLogNavigationStartMessage      = "chromedp navigate: user-agent=%q url=%s"
+	chromeLogNavigationSuccessMessage    = "chromedp render success: url=%s bytes=%d"
+	chromeLogNavigationErrorMessage      = "chromedp render failure: url=%s err=%v"
+	chromeLogNetworkRequestMessage       = "chromedp network request: url=%s"
+	chromeLogNetworkResponseMessage      = "chromedp network response: url=%s status=%d"
+	chromeLogNetworkFailureMessage       = "chromedp network failure: url=%s error=%s canceled=%v"
+	chromeLogTargetCrashMessage          = "chromedp target crashed"
+	acceptLanguageHeaderName             = "Accept-Language"
+	acceptLanguageHeaderValue            = "en-US,en;q=0.9"
+	upgradeInsecureRequestsHeaderName    = "Upgrade-Insecure-Requests"
+	upgradeInsecureRequestsHeaderValue   = "1"
 	documentReadyStateScript             = "document.readyState"
 	documentReadyStateCompleteValue      = "complete"
 	documentReadyStatePollInterval       = 100 * time.Millisecond
 	documentOuterHTMLScript              = "document.documentElement.outerHTML"
 	documentOuterHTMLNilDestinationError = "html destination pointer is nil"
-
-	navigatorPlatformMacValue     = "MacIntel"
-	navigatorPlatformWindowsValue = "Win32"
-	navigatorPlatformLinuxValue   = "Linux x86_64"
-
-	navigatorWebdriverOverrideScript    = "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
-	navigatorLanguagesOverrideScript    = "Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });"
-	navigatorPluginsOverrideScript      = "Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });"
-	windowChromeRuntimeDefinitionScript = "window.chrome = window.chrome || {}; window.chrome.runtime = {};"
-	navigatorPermissionsOverrideScript  = "const originalQuery = window.navigator.permissions.query; window.navigator.permissions.query = (parameters) => (parameters && parameters.name === 'notifications' ? Promise.resolve({ state: 'default' }) : originalQuery(parameters));"
-
-	userAgentChromeMarker           = "Chrome/"
-	userAgentMacintoshToken         = "macintosh"
-	userAgentWindowsToken           = "windows"
-	userAgentLinuxToken             = "linux"
-	userAgentMacVersionToken        = "Mac OS X "
-	userAgentWindowsVersionToken    = "Windows NT "
-	userAgentTokenUnderscore        = "_"
-	userAgentPlatformMacOS          = "macOS"
-	userAgentPlatformWindows        = "Windows"
-	userAgentPlatformLinux          = "Linux"
-	userAgentPlatformVersionDefault = "0.0.0"
-	userAgentArchitectureX86        = "x86"
-	userAgentBitness64              = "64"
-	userAgentWow64Token             = "wow64"
-	versionDelimiterSpaceRune       = ' '
-	versionDelimiterSemicolonRune   = ';'
-	versionDelimiterParenRune       = ')'
-
-	chromeBrandNotABrandName    = "Not A(Brand"
-	chromeBrandNotABrandVersion = "8"
-	chromeBrandChromiumName     = "Chromium"
-	chromeBrandGoogleChromeName = "Google Chrome"
+	navigatorPlatformMacValue            = "MacIntel"
+	navigatorPlatformWindowsValue        = "Win32"
+	navigatorPlatformLinuxValue          = "Linux x86_64"
+	navigatorWebdriverOverrideScript     = "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+	navigatorLanguagesOverrideScript     = "Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });"
+	navigatorPluginsOverrideScript       = "Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });"
+	windowChromeRuntimeDefinitionScript  = "window.chrome = window.chrome || {}; window.chrome.runtime = {};"
+	navigatorPermissionsOverrideScript   = "const originalQuery = window.navigator.permissions.query; window.navigator.permissions.query = (parameters) => (parameters && parameters.name === 'notifications' ? Promise.resolve({ state: 'default' }) : originalQuery(parameters));"
+	userAgentChromeMarker                = "Chrome/"
+	userAgentMacintoshToken              = "macintosh"
+	userAgentWindowsToken                = "windows"
+	userAgentLinuxToken                  = "linux"
+	userAgentMacVersionToken             = "Mac OS X "
+	userAgentWindowsVersionToken         = "Windows NT "
+	userAgentTokenUnderscore             = "_"
+	userAgentPlatformMacOS               = "macOS"
+	userAgentPlatformWindows             = "Windows"
+	userAgentPlatformLinux               = "Linux"
+	userAgentPlatformVersionDefault      = "0.0.0"
+	userAgentArchitectureX86             = "x86"
+	userAgentBitness64                   = "64"
+	userAgentWow64Token                  = "wow64"
+	versionDelimiterSpaceRune            = ' '
+	versionDelimiterSemicolonRune        = ';'
+	versionDelimiterParenRune            = ')'
+	chromeBrandNotABrandName             = "Not A(Brand"
+	chromeBrandNotABrandVersion          = "8"
+	chromeBrandChromiumName              = "Chromium"
+	chromeBrandGoogleChromeName          = "Google Chrome"
 )
 
 var stealthScripts = []string{
@@ -180,18 +175,20 @@ func (renderer *ChromeRenderer) Render(ctx context.Context, userAgent, url strin
 	if trimmedURL == "" {
 		return "", fmt.Errorf(chromeRendererEmptyURLErrorMessage)
 	}
-
 	trimmedUserAgent := strings.TrimSpace(userAgent)
-	allocatorOptions := append([]chromedp.ExecAllocatorOption{}, chromedp.DefaultExecAllocatorOptions[:]...)
-	allocatorOptions = append(allocatorOptions,
+
+	// --- Stable allocator flags (no DefaultExecAllocatorOptions) ---
+	// We prefer legacy headless + software GL for stability on macOS.
+	allocatorOptions := []chromedp.ExecAllocatorOption{
+		// Legacy headless (boolean) – avoids renderer crash seen on macOS with headless=new.
 		chromedp.Flag(chromeHeadlessFlagKey, true),
-		chromedp.Flag(chromeDisableGPUFlagKey, true),
-		chromedp.Flag(chromeDisableGPUStartupFlagKey, true),
+
+		// Disable GPU and use SwiftShader (software GL).
+		chromedp.Flag("disable-gpu", true),
+		chromedp.Flag("use-gl", "swiftshader"),
+
+		// Reduce noise / prompts / logs.
 		chromedp.Flag(chromeDisableDevShmUsageFlagKey, true),
-		chromedp.Flag(chromeUseGLFlagKey, chromeUseGLSwiftShaderValue),
-		chromedp.Flag(chromeEnableUnsafeSwiftShaderFlag, true),
-		chromedp.Flag(chromeNoSandboxFlagKey, true),
-		chromedp.Flag(chromeDisableSetuidSandboxFlagKey, true),
 		chromedp.Flag(chromeRemoteAllowOriginsFlagKey, chromeRemoteAllowOriginsValue),
 		chromedp.Flag(chromeHideScrollbarsFlagKey, true),
 		chromedp.Flag(chromeNoFirstRunFlagKey, true),
@@ -201,23 +198,47 @@ func (renderer *ChromeRenderer) Render(ctx context.Context, userAgent, url strin
 		chromedp.Flag(chromeDisableLoggingFlagKey, true),
 		chromedp.Flag(chromeIgnoreCertificateErrorsFlag, true),
 		chromedp.Flag(chromeVirtualTimeBudgetFlagKey, strconv.Itoa(effectiveBudget)),
+
+		// Reduce automation hints.
 		chromedp.Flag(chromeEnableAutomationFlagKey, false),
 		chromedp.Flag(chromeDisableBlinkFeaturesFlagKey, chromeAutomationControlledBlinkValue),
 		chromedp.Flag(chromeDisableExtensionsFlagKey, true),
 		chromedp.Flag(chromeDisableComponentExtensionsBackgroundFlagKey, true),
-	)
+	}
+
+	// Sandbox flags only for Linux containers (not needed on macOS/Windows).
+	if runtime.GOOS == "linux" {
+		allocatorOptions = append(allocatorOptions,
+			chromedp.Flag("no-sandbox", true),
+			chromedp.Flag("disable-setuid-sandbox", true),
+		)
+	}
+
+	// Optional override via env:
+	//   XRESOLVER_HEADLESS_MODE=legacy|new
+	//   XRESOLVER_HEADLESS_GPU=0|1
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("XRESOLVER_HEADLESS_MODE"))) {
+	case "new":
+		// Switch to headless=new (remove boolean headless, turn GPU back on unless XRESOLVER_HEADLESS_GPU=0).
+		allocatorOptions = append(allocatorOptions,
+			chromedp.Flag(chromeHeadlessFlagKey, chromeHeadlessModeNewValue),
+		)
+	}
+	if os.Getenv("XRESOLVER_HEADLESS_GPU") == "1" {
+		allocatorOptions = append(allocatorOptions,
+			chromedp.Flag("disable-gpu", false),
+			chromedp.Flag("use-gl", "angle"),
+		)
+	}
 
 	if proxyValue := chromeProxyServerValue(trimmedURL); proxyValue != "" {
 		allocatorOptions = append(allocatorOptions, chromedp.Flag(chromeProxyServerFlagKey, proxyValue))
 	}
-
 	if trimmedUserAgent != "" {
 		allocatorOptions = append(allocatorOptions, chromedp.Flag(chromeUserAgentFlagKey, trimmedUserAgent))
 	}
-
-	trimmedChromePath := strings.TrimSpace(chromePath)
-	if trimmedChromePath != "" {
-		allocatorOptions = append(allocatorOptions, chromedp.ExecPath(trimmedChromePath))
+	if p := strings.TrimSpace(chromePath); p != "" {
+		allocatorOptions = append(allocatorOptions, chromedp.ExecPath(p))
 	}
 
 	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, allocatorOptions...)
@@ -232,7 +253,6 @@ func (renderer *ChromeRenderer) Render(ctx context.Context, userAgent, url strin
 			chromedp.WithDebugf(chromeLogPrinter),
 		)
 	}
-
 	chromeCtx, cancelChrome := chromedp.NewContext(allocatorCtx, contextOptions...)
 	defer cancelChrome()
 
@@ -272,9 +292,9 @@ func (renderer *ChromeRenderer) Render(ctx context.Context, userAgent, url strin
 		chromedp.ActionFunc(applyStealthScripts),
 	}
 	if trimmedUserAgent != "" {
-		userAgentValue := trimmedUserAgent
-		renderTasks = append(renderTasks, chromedp.ActionFunc(func(chromedpCtx context.Context) error {
-			return applyUserAgentOverride(chromedpCtx, userAgentValue)
+		ua := trimmedUserAgent
+		renderTasks = append(renderTasks, chromedp.ActionFunc(func(c context.Context) error {
+			return applyUserAgentOverride(c, ua)
 		}))
 	}
 	if chromeLogPrinter != nil {
@@ -282,9 +302,10 @@ func (renderer *ChromeRenderer) Render(ctx context.Context, userAgent, url strin
 	}
 	renderTasks = append(renderTasks,
 		chromedp.Navigate(trimmedURL),
+		// We poll readyState instead of relying on lifecycle events (avoids Page.setLifecycleEventsEnabled timing).
 		chromedp.ActionFunc(waitForDocumentReadyStateComplete),
-		chromedp.ActionFunc(func(chromedpCtx context.Context) error {
-			return readDocumentOuterHTML(chromedpCtx, &htmlContent)
+		chromedp.ActionFunc(func(c context.Context) error {
+			return readDocumentOuterHTML(c, &htmlContent)
 		}),
 	)
 
@@ -322,7 +343,6 @@ func NewService(cfg Config, renderer Renderer) *Service {
 }
 
 // ResolveBatch resolves all IDs in-order using a single network funnel with pacing.
-// It returns one Profile per input ID (same order).
 func (s *Service) ResolveBatch(ctx context.Context, req Request) []Profile {
 	results := make([]Profile, 0, len(req.IDs))
 	processed := 0
@@ -351,18 +371,17 @@ func (s *Service) ResolveBatch(ctx context.Context, req Request) []Profile {
 			s.cfg.Logf("id=%s done in %v err=%v", id, time.Since(started), condErr(pro.Err))
 		}
 		if cancel != nil {
-			cancel() // immediate cancel per-id (don't defer across loop)
+			cancel()
 		}
 
 		processed++
 
-		// per-request pacing with jitter
+		// pacing with jitter
 		if sleep := s.jitterDuration(s.cfg.Delay, s.cfg.Jitter); sleep > 0 {
 			if !s.sleepCtx(ctx, sleep) {
 				return results
 			}
 		}
-
 		// burst rest
 		if s.cfg.BurstSize > 0 && processed%s.cfg.BurstSize == 0 {
 			if rest := s.jitterDuration(s.cfg.BurstRest, s.cfg.BurstJitter); rest > 0 {
@@ -516,7 +535,7 @@ func (s *Service) backoffDuration(attempt int) time.Duration {
 	if max < min {
 		max = min
 	}
-	// exponential-like growth clipped to [min,max]
+	// linear-ish growth clipped to [min,max]
 	scale := 1.0 + float64(attempt)
 	d := time.Duration(float64(min) * scale)
 	if d > max {
@@ -628,15 +647,14 @@ func applyStealthScripts(chromedpCtx context.Context) error {
 }
 
 func applyUserAgentOverride(chromedpCtx context.Context, userAgent string) error {
-	userAgentOverride := emulation.SetUserAgentOverride(userAgent).WithAcceptLanguage(acceptLanguageHeaderValue)
-	navigatorPlatform := navigatorPlatformForUserAgent(userAgent)
-	if navigatorPlatform != "" {
-		userAgentOverride = userAgentOverride.WithPlatform(navigatorPlatform)
+	ua := emulation.SetUserAgentOverride(userAgent).WithAcceptLanguage(acceptLanguageHeaderValue)
+	if p := navigatorPlatformForUserAgent(userAgent); p != "" {
+		ua = ua.WithPlatform(p)
 	}
 	if metadata := userAgentMetadataFromUserAgent(userAgent); metadata != nil {
-		userAgentOverride = userAgentOverride.WithUserAgentMetadata(metadata)
+		ua = ua.WithUserAgentMetadata(metadata)
 	}
-	return userAgentOverride.Do(chromedpCtx)
+	return ua.Do(chromedpCtx)
 }
 
 func waitForDocumentReadyStateComplete(chromedpCtx context.Context) error {
@@ -671,7 +689,6 @@ func readDocumentOuterHTML(chromedpCtx context.Context, htmlContentDestination *
 	if htmlContentDestination == nil {
 		return fmt.Errorf(documentOuterHTMLNilDestinationError)
 	}
-
 	var documentOuterHTML string
 	if err := chromedp.Evaluate(documentOuterHTMLScript, &documentOuterHTML, chromedp.EvalAsValue).Do(chromedpCtx); err != nil {
 		return err
@@ -681,13 +698,13 @@ func readDocumentOuterHTML(chromedpCtx context.Context, htmlContentDestination *
 }
 
 func navigatorPlatformForUserAgent(userAgent string) string {
-	normalized := strings.ToLower(userAgent)
+	n := strings.ToLower(userAgent)
 	switch {
-	case strings.Contains(normalized, userAgentMacintoshToken):
+	case strings.Contains(n, userAgentMacintoshToken):
 		return navigatorPlatformMacValue
-	case strings.Contains(normalized, userAgentWindowsToken):
+	case strings.Contains(n, userAgentWindowsToken):
 		return navigatorPlatformWindowsValue
-	case strings.Contains(normalized, userAgentLinuxToken):
+	case strings.Contains(n, userAgentLinuxToken):
 		return navigatorPlatformLinuxValue
 	default:
 		return navigatorPlatformMacValue
@@ -699,19 +716,17 @@ func userAgentMetadataFromUserAgent(userAgent string) *emulation.UserAgentMetada
 	if majorVersion == "" || fullVersion == "" {
 		return nil
 	}
-	platformDetails := platformDetailsFromUserAgent(userAgent)
-	brandVersions := majorBrandVersions(majorVersion)
-	fullVersionList := fullVersionBrandList(fullVersion)
+	pd := platformDetailsFromUserAgent(userAgent)
 	return &emulation.UserAgentMetadata{
-		Brands:          brandVersions,
-		FullVersionList: fullVersionList,
-		Platform:        platformDetails.platform,
-		PlatformVersion: platformDetails.platformVersion,
-		Architecture:    platformDetails.architecture,
-		Model:           platformDetails.model,
+		Brands:          majorBrandVersions(majorVersion),
+		FullVersionList: fullVersionBrandList(fullVersion),
+		Platform:        pd.platform,
+		PlatformVersion: pd.platformVersion,
+		Architecture:    pd.architecture,
+		Model:           pd.model,
 		Mobile:          false,
-		Bitness:         platformDetails.bitness,
-		Wow64:           platformDetails.wow64,
+		Bitness:         pd.bitness,
+		Wow64:           pd.wow64,
 	}
 }
 
@@ -725,8 +740,8 @@ type userAgentPlatformDetails struct {
 }
 
 func platformDetailsFromUserAgent(userAgent string) userAgentPlatformDetails {
-	normalized := strings.ToLower(userAgent)
-	details := userAgentPlatformDetails{
+	n := strings.ToLower(userAgent)
+	d := userAgentPlatformDetails{
 		platform:        userAgentPlatformMacOS,
 		platformVersion: userAgentPlatformVersionDefault,
 		architecture:    userAgentArchitectureX86,
@@ -735,151 +750,138 @@ func platformDetailsFromUserAgent(userAgent string) userAgentPlatformDetails {
 		wow64:           false,
 	}
 	switch {
-	case strings.Contains(normalized, userAgentMacintoshToken):
-		details.platform = userAgentPlatformMacOS
-		details.platformVersion = macPlatformVersion(userAgent)
-	case strings.Contains(normalized, userAgentWindowsToken):
-		details.platform = userAgentPlatformWindows
-		details.platformVersion = windowsPlatformVersion(userAgent)
-		details.wow64 = strings.Contains(normalized, userAgentWow64Token)
-	case strings.Contains(normalized, userAgentLinuxToken):
-		details.platform = userAgentPlatformLinux
-		details.platformVersion = userAgentPlatformVersionDefault
+	case strings.Contains(n, userAgentMacintoshToken):
+		d.platform = userAgentPlatformMacOS
+		d.platformVersion = macPlatformVersion(userAgent)
+	case strings.Contains(n, userAgentWindowsToken):
+		d.platform = userAgentPlatformWindows
+		d.platformVersion = windowsPlatformVersion(userAgent)
+		d.wow64 = strings.Contains(n, userAgentWow64Token)
+	case strings.Contains(n, userAgentLinuxToken):
+		d.platform = userAgentPlatformLinux
+		d.platformVersion = userAgentPlatformVersionDefault
 	default:
-		details.platform = userAgentPlatformMacOS
-		details.platformVersion = userAgentPlatformVersionDefault
+		d.platform = userAgentPlatformMacOS
+		d.platformVersion = userAgentPlatformVersionDefault
 	}
-	return details
+	return d
 }
 
 func extractChromeVersions(userAgent string) (string, string) {
-	markerIndex := strings.Index(userAgent, userAgentChromeMarker)
-	if markerIndex < 0 {
+	i := strings.Index(userAgent, userAgentChromeMarker)
+	if i < 0 {
 		return "", ""
 	}
-	versionSection := userAgent[markerIndex+len(userAgentChromeMarker):]
-	delimiterIndex := indexOfVersionDelimiter(versionSection)
-	versionValue := strings.TrimSpace(versionSection[:delimiterIndex])
-	if versionValue == "" {
+	section := userAgent[i+len(userAgentChromeMarker):]
+	delim := indexOfVersionDelimiter(section)
+	val := strings.TrimSpace(section[:delim])
+	if val == "" {
 		return "", ""
 	}
-	majorVersion := versionValue
-	if dotIndex := strings.Index(versionValue, "."); dotIndex >= 0 {
-		majorVersion = versionValue[:dotIndex]
+	major := val
+	if dot := strings.Index(val, "."); dot >= 0 {
+		major = val[:dot]
 	}
-	return majorVersion, versionValue
+	return major, val
 }
 
 func macPlatformVersion(userAgent string) string {
-	rawVersion := parseVersionAfterToken(userAgent, userAgentMacVersionToken)
-	if rawVersion == "" {
+	raw := parseVersionAfterToken(userAgent, userAgentMacVersionToken)
+	if raw == "" {
 		return userAgentPlatformVersionDefault
 	}
-	normalizedVersion := strings.ReplaceAll(rawVersion, userAgentTokenUnderscore, ".")
-	return canonicalizeVersion(normalizedVersion)
+	return canonicalizeVersion(strings.ReplaceAll(raw, userAgentTokenUnderscore, "."))
 }
 
 func windowsPlatformVersion(userAgent string) string {
-	rawVersion := parseVersionAfterToken(userAgent, userAgentWindowsVersionToken)
-	if rawVersion == "" {
+	raw := parseVersionAfterToken(userAgent, userAgentWindowsVersionToken)
+	if raw == "" {
 		return userAgentPlatformVersionDefault
 	}
-	return canonicalizeVersion(rawVersion)
+	return canonicalizeVersion(raw)
 }
 
-func parseVersionAfterToken(userAgent string, token string) string {
-	startIndex := strings.Index(userAgent, token)
-	if startIndex < 0 {
+func parseVersionAfterToken(userAgent, token string) string {
+	i := strings.Index(userAgent, token)
+	if i < 0 {
 		return ""
 	}
-	versionSection := userAgent[startIndex+len(token):]
-	delimiterIndex := indexOfVersionDelimiter(versionSection)
-	versionCandidate := strings.TrimSpace(versionSection[:delimiterIndex])
-	return versionCandidate
+	section := userAgent[i+len(token):]
+	delim := indexOfVersionDelimiter(section)
+	return strings.TrimSpace(section[:delim])
 }
 
-func indexOfVersionDelimiter(versionSection string) int {
-	for index, charValue := range versionSection {
-		if charValue == versionDelimiterSpaceRune || charValue == versionDelimiterSemicolonRune || charValue == versionDelimiterParenRune {
-			return index
+func indexOfVersionDelimiter(section string) int {
+	for i, ch := range section {
+		if ch == versionDelimiterSpaceRune || ch == versionDelimiterSemicolonRune || ch == versionDelimiterParenRune {
+			return i
 		}
 	}
-	return len(versionSection)
+	return len(section)
 }
 
-func canonicalizeVersion(version string) string {
-	if version == "" {
+func canonicalizeVersion(v string) string {
+	if v == "" {
 		return userAgentPlatformVersionDefault
 	}
-	components := strings.Split(version, ".")
-	for len(components) < 3 {
-		components = append(components, "0")
+	parts := strings.Split(v, ".")
+	for len(parts) < 3 {
+		parts = append(parts, "0")
 	}
-	if len(components) > 3 {
-		components = components[:3]
+	if len(parts) > 3 {
+		parts = parts[:3]
 	}
-	return strings.Join(components, ".")
+	return strings.Join(parts, ".")
 }
 
-func majorBrandVersions(majorVersion string) []*emulation.UserAgentBrandVersion {
-	if majorVersion == "" {
+func majorBrandVersions(major string) []*emulation.UserAgentBrandVersion {
+	if major == "" {
 		return nil
 	}
 	return []*emulation.UserAgentBrandVersion{
-		buildBrandVersion(chromeBrandNotABrandName, chromeBrandNotABrandVersion),
-		buildBrandVersion(chromeBrandChromiumName, majorVersion),
-		buildBrandVersion(chromeBrandGoogleChromeName, majorVersion),
+		{Brand: chromeBrandNotABrandName, Version: chromeBrandNotABrandVersion},
+		{Brand: chromeBrandChromiumName, Version: major},
+		{Brand: chromeBrandGoogleChromeName, Version: major},
 	}
 }
 
-func fullVersionBrandList(fullVersion string) []*emulation.UserAgentBrandVersion {
-	if fullVersion == "" {
+func fullVersionBrandList(full string) []*emulation.UserAgentBrandVersion {
+	if full == "" {
 		return nil
 	}
 	return []*emulation.UserAgentBrandVersion{
-		buildBrandVersion(chromeBrandChromiumName, fullVersion),
-		buildBrandVersion(chromeBrandGoogleChromeName, fullVersion),
+		{Brand: chromeBrandChromiumName, Version: full},
+		{Brand: chromeBrandGoogleChromeName, Version: full},
 	}
-}
-
-func buildBrandVersion(brand string, version string) *emulation.UserAgentBrandVersion {
-	return &emulation.UserAgentBrandVersion{Brand: brand, Version: version}
 }
 
 func chromeProxyServerValue(targetURL string) string {
-	normalizedURL := strings.TrimSpace(targetURL)
-	if normalizedURL == "" {
+	u := strings.TrimSpace(targetURL)
+	if u == "" {
 		return ""
 	}
-
-	parsedURL, parseErr := neturl.Parse(normalizedURL)
-	if parseErr != nil {
+	parsedURL, err := neturl.Parse(u)
+	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
 		return ""
 	}
-	if parsedURL.Scheme == "" || parsedURL.Host == "" {
+	proxy := firstNonEmptyEnvValue(proxyEnvironmentKeys(parsedURL.Scheme)...)
+	if proxy == "" && parsedURL.Scheme == "https" {
+		proxy = firstNonEmptyEnvValue(proxyEnvironmentKeys("http")...)
+	}
+	if proxy == "" {
+		proxy = firstNonEmptyEnvValue(allProxyEnvironmentUpper, allProxyEnvironmentLower)
+	}
+	if proxy == "" {
 		return ""
 	}
-
-	proxyCandidate := firstNonEmptyEnvValue(proxyEnvironmentKeys(parsedURL.Scheme)...)
-	if proxyCandidate == "" && parsedURL.Scheme == "https" {
-		proxyCandidate = firstNonEmptyEnvValue(proxyEnvironmentKeys("http")...)
-	}
-	if proxyCandidate == "" {
-		proxyCandidate = firstNonEmptyEnvValue(allProxyEnvironmentUpper, allProxyEnvironmentLower)
-	}
-	if proxyCandidate == "" {
-		return ""
-	}
-
 	if bypassProxy(parsedURL, firstNonEmptyEnvValue(noProxyEnvironmentUpper, noProxyEnvironmentLower)) {
 		return ""
 	}
-
-	parsedProxyURL, proxyParseErr := neturl.Parse(proxyCandidate)
-	if proxyParseErr != nil || strings.TrimSpace(parsedProxyURL.Host) == "" {
+	pp, perr := neturl.Parse(proxy)
+	if perr != nil || strings.TrimSpace(pp.Host) == "" {
 		return ""
 	}
-	return proxyCandidate
+	return proxy
 }
 
 func proxyEnvironmentKeys(scheme string) []string {
@@ -893,15 +895,14 @@ func proxyEnvironmentKeys(scheme string) []string {
 	}
 }
 
-func firstNonEmptyEnvValue(environmentKeys ...string) string {
-	for _, key := range environmentKeys {
-		if key == "" {
+func firstNonEmptyEnvValue(keys ...string) string {
+	for _, k := range keys {
+		if k == "" {
 			continue
 		}
-		if value, present := os.LookupEnv(key); present {
-			trimmed := strings.TrimSpace(value)
-			if trimmed != "" {
-				return trimmed
+		if v, ok := os.LookupEnv(k); ok {
+			if s := strings.TrimSpace(v); s != "" {
+				return s
 			}
 		}
 	}
@@ -921,46 +922,37 @@ func bypassProxy(targetURL *neturl.URL, noProxyList string) bool {
 		return false
 	}
 
-	entries := strings.Split(noProxyList, ",")
-	for _, entry := range entries {
-		trimmedEntry := strings.TrimSpace(entry)
-		if trimmedEntry == "" {
+	for _, entry := range strings.Split(noProxyList, ",") {
+		e := strings.TrimSpace(entry)
+		if e == "" {
 			continue
 		}
-		if trimmedEntry == "*" {
+		if e == "*" {
 			return true
 		}
-
-		entryHost := trimmedEntry
+		entryHost := e
 		entryPort := ""
-		if strings.Contains(trimmedEntry, ":") {
-			parsedHost, parsedPort, splitErr := net.SplitHostPort(trimmedEntry)
-			if splitErr == nil {
-				entryHost = parsedHost
-				entryPort = parsedPort
+		if strings.Contains(e, ":") {
+			if h, p, err := net.SplitHostPort(e); err == nil {
+				entryHost, entryPort = h, p
 			}
 		}
-
-		normalizedEntryHost := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(entryHost, "*"), "."))
-		if normalizedEntryHost == "" {
+		neh := strings.ToLower(strings.TrimPrefix(strings.TrimPrefix(entryHost, "*"), "."))
+		if neh == "" {
 			continue
 		}
 		if entryPort != "" && entryPort != port {
 			continue
 		}
-
-		if host == normalizedEntryHost {
-			return true
-		}
-		if strings.HasSuffix(host, "."+normalizedEntryHost) {
+		if host == neh || strings.HasSuffix(host, "."+neh) {
 			return true
 		}
 	}
 	return false
 }
 
-func defaultPortForScheme(scheme string) string {
-	switch strings.ToLower(scheme) {
+func defaultPortForScheme(s string) string {
+	switch strings.ToLower(s) {
 	case "https":
 		return "443"
 	case "http":
