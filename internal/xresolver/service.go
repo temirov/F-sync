@@ -24,30 +24,74 @@ import (
 const (
 	defaultVirtualTimeBudgetMilliseconds = 15000
 
-	// Headless / GPU
-	chromeHeadlessFlagKey           = "headless"
-	chromeHeadlessModeNewValue      = "new"
-	chromeDisableDevShmUsageFlagKey = "disable-dev-shm-usage"
-	chromeEnableGPUFlagKey          = "enable-gpu"
+	// Headless / GPU (modern)
+	chromeHeadlessFlagKey      = "headless"
+	chromeHeadlessModeNewValue = "new"
 
-	// Stealth / noise reduction
-	chromeEnableAutomationFlagKey                     = "enable-automation"
-	chromeDisableBlinkFeaturesFlagKey                 = "disable-blink-features"
-	chromeAutomationControlledBlinkValue              = "AutomationControlled"
-	chromeDisableExtensionsFlagKey                    = "disable-extensions"
-	chromeDisableComponentExtensionsBackgroundFlagKey = "disable-component-extensions-with-background-pages"
-	chromeHideScrollbarsFlagKey                       = "hide-scrollbars"
-	chromeNoFirstRunFlagKey                           = "no-first-run"
-	chromeNoDefaultBrowserCheckFlagKey                = "no-default-browser-check"
-	chromeLogLevelFlagKey                             = "log-level"
-	chromeSilentFlagKey                               = "silent"
-	chromeDisableLoggingFlagKey                       = "disable-logging"
-	chromeIgnoreCertificateErrorsFlag                 = "ignore-certificate-errors"
+	// Noise reduction
+	chromeDisableDevShmUsageFlagKey                 = "disable-dev-shm-usage"
+	chromeDisableExtensionsFlagKey                  = "disable-extensions"
+	chromeDisableComponentExtensionsBackground      = "disable-component-extensions-with-background-pages"
+	chromeDisableBlinkFeaturesFlagKey               = "disable-blink-features"
+	chromeAutomationControlledBlinkValue            = "AutomationControlled"
+	chromeNoFirstRunFlagKey                         = "no-first-run"
+	chromeNoDefaultBrowserCheckFlagKey              = "no-default-browser-check"
+	chromeLogLevelFlagKey                           = "log-level"
+	chromeSilentFlagKey                             = "silent"
+	chromeDisableLoggingFlagKey                     = "disable-logging"
+	chromeIgnoreCertificateErrorsFlag               = "ignore-certificate-errors"
+	acceptLanguageHeaderName                        = "Accept-Language"
+	acceptLanguageHeaderValue                       = "en-US,en;q=0.9"
+	upgradeInsecureRequestsHeaderName               = "Upgrade-Insecure-Requests"
+	upgradeInsecureRequestsHeaderValue              = "1"
+	chromeUserAgentFlagKey                          = "user-agent"
+	chromeVirtualTimeBudgetFlagKey                  = "virtual-time-budget"
+	chromeProxyServerFlagKey                        = "proxy-server"
+	chromeSilentLogLevelValue                       = "3"
+	chromeRendererEmptyURLErrorMessage              = "empty url"
+	chromeLogNavigationStartMessage                 = "chromedp navigate: user-agent=%q url=%s"
+	chromeLogNavigationSuccessMessage               = "chromedp render success: url=%s bytes=%d"
+	chromeLogNavigationErrorMessage                 = "chromedp render failure: url=%s err=%v"
+	chromeLogNetworkRequestMessage                  = "chromedp network request: url=%s"
+	chromeLogNetworkResponseMessage                 = "chromedp network response: url=%s status=%d"
+	chromeLogNetworkFailureMessage                  = "chromedp network failure: url=%s error=%s canceled=%v"
+	chromeLogTargetCrashMessage                     = "chromedp target crashed"
+	documentReadyStateScript                        = "document.readyState"
+	documentReadyStateCompleteValue                 = "complete"
+	documentReadyStatePollInterval                  = 100 * time.Millisecond
+	documentOuterHTMLScript                         = "document.documentElement.outerHTML"
+	documentOuterHTMLNilDestinationError            = "html destination pointer is nil"
+	navigatorPlatformMacValue                       = "MacIntel"
+	navigatorPlatformWindowsValue                   = "Win32"
+	navigatorPlatformLinuxValue                     = "Linux x86_64"
+	navigatorWebdriverOverrideScript                = "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
+	navigatorLanguagesOverrideScript                = "Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });"
+	navigatorPluginsOverrideScript                  = "Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });"
+	windowChromeRuntimeDefinitionScript             = "window.chrome = window.chrome || {}; window.chrome.runtime = {};"
+	navigatorPermissionsOverrideScript              = "const originalQuery = window.navigator.permissions.query; window.navigator.permissions.query = (parameters) => (parameters && parameters.name === 'notifications' ? Promise.resolve({ state: 'default' }) : originalQuery(parameters));"
+	userAgentChromeMarker                           = "Chrome/"
+	userAgentMacintoshToken                         = "macintosh"
+	userAgentWindowsToken                           = "windows"
+	userAgentLinuxToken                             = "linux"
+	userAgentMacVersionToken                        = "Mac OS X "
+	userAgentWindowsVersionToken                    = "Windows NT "
+	userAgentTokenUnderscore                        = "_"
+	userAgentPlatformMacOS                          = "macOS"
+	userAgentPlatformWindows                        = "Windows"
+	userAgentPlatformLinux                          = "Linux"
+	userAgentPlatformVersionDefault                 = "0.0.0"
+	userAgentArchitectureX86                        = "x86"
+	userAgentBitness64                              = "64"
+	userAgentWow64Token                             = "wow64"
+	versionDelimiterSpaceRune                  rune = ' '
+	versionDelimiterSemicolonRune              rune = ';'
+	versionDelimiterParenRune                  rune = ')'
+	chromeBrandNotABrandName                        = "Not A(Brand"
+	chromeBrandNotABrandVersion                     = "8"
+	chromeBrandChromiumName                         = "Chromium"
+	chromeBrandGoogleChromeName                     = "Google Chrome"
 
-	chromeUserAgentFlagKey         = "user-agent"
-	chromeVirtualTimeBudgetFlagKey = "virtual-time-budget"
-	chromeProxyServerFlagKey       = "proxy-server"
-
+	// Proxy env
 	httpsProxyEnvironmentUpper = "HTTPS_PROXY"
 	httpsProxyEnvironmentLower = "https_proxy"
 	httpProxyEnvironmentUpper  = "HTTP_PROXY"
@@ -56,54 +100,6 @@ const (
 	allProxyEnvironmentLower   = "all_proxy"
 	noProxyEnvironmentUpper    = "NO_PROXY"
 	noProxyEnvironmentLower    = "no_proxy"
-
-	chromeSilentLogLevelValue            = "3"
-	chromeRendererEmptyURLErrorMessage   = "empty url"
-	chromeLogNavigationStartMessage      = "chromedp navigate: user-agent=%q url=%s"
-	chromeLogNavigationSuccessMessage    = "chromedp render success: url=%s bytes=%d"
-	chromeLogNavigationErrorMessage      = "chromedp render failure: url=%s err=%v"
-	chromeLogNetworkRequestMessage       = "chromedp network request: url=%s"
-	chromeLogNetworkResponseMessage      = "chromedp network response: url=%s status=%d"
-	chromeLogNetworkFailureMessage       = "chromedp network failure: url=%s error=%s canceled=%v"
-	chromeLogTargetCrashMessage          = "chromedp target crashed"
-	acceptLanguageHeaderName             = "Accept-Language"
-	acceptLanguageHeaderValue            = "en-US,en;q=0.9"
-	upgradeInsecureRequestsHeaderName    = "Upgrade-Insecure-Requests"
-	upgradeInsecureRequestsHeaderValue   = "1"
-	documentReadyStateScript             = "document.readyState"
-	documentReadyStateCompleteValue      = "complete"
-	documentReadyStatePollInterval       = 100 * time.Millisecond
-	documentOuterHTMLScript              = "document.documentElement.outerHTML"
-	documentOuterHTMLNilDestinationError = "html destination pointer is nil"
-	navigatorPlatformMacValue            = "MacIntel"
-	navigatorPlatformWindowsValue        = "Win32"
-	navigatorPlatformLinuxValue          = "Linux x86_64"
-	navigatorWebdriverOverrideScript     = "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });"
-	navigatorLanguagesOverrideScript     = "Object.defineProperty(navigator, 'languages', { get: () => ['en-US','en'] });"
-	navigatorPluginsOverrideScript       = "Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });"
-	windowChromeRuntimeDefinitionScript  = "window.chrome = window.chrome || {}; window.chrome.runtime = {};"
-	navigatorPermissionsOverrideScript   = "const originalQuery = window.navigator.permissions.query; window.navigator.permissions.query = (parameters) => (parameters && parameters.name === 'notifications' ? Promise.resolve({ state: 'default' }) : originalQuery(parameters));"
-	userAgentChromeMarker                = "Chrome/"
-	userAgentMacintoshToken              = "macintosh"
-	userAgentWindowsToken                = "windows"
-	userAgentLinuxToken                  = "linux"
-	userAgentMacVersionToken             = "Mac OS X "
-	userAgentWindowsVersionToken         = "Windows NT "
-	userAgentTokenUnderscore             = "_"
-	userAgentPlatformMacOS               = "macOS"
-	userAgentPlatformWindows             = "Windows"
-	userAgentPlatformLinux               = "Linux"
-	userAgentPlatformVersionDefault      = "0.0.0"
-	userAgentArchitectureX86             = "x86"
-	userAgentBitness64                   = "64"
-	userAgentWow64Token                  = "wow64"
-	versionDelimiterSpaceRune            = ' '
-	versionDelimiterSemicolonRune        = ';'
-	versionDelimiterParenRune            = ')'
-	chromeBrandNotABrandName             = "Not A(Brand"
-	chromeBrandNotABrandVersion          = "8"
-	chromeBrandChromiumName              = "Chromium"
-	chromeBrandGoogleChromeName          = "Google Chrome"
 )
 
 var stealthScripts = []string{
@@ -116,35 +112,33 @@ var stealthScripts = []string{
 
 // Config controls resolver behavior. Suitable for CLI & Web usage.
 type Config struct {
-	ChromePath          string // path to Chrome/Chromium binary
-	VirtualTimeBudgetMS int    // headless Chrome --virtual-time-budget (ms)
+	ChromePath          string
+	VirtualTimeBudgetMS int
 
-	PerIDTimeout   time.Duration // timeout per ID
-	AttemptTimeout time.Duration // timeout per single render attempt (<= PerIDTimeout), optional
+	PerIDTimeout   time.Duration
+	AttemptTimeout time.Duration
 
 	// Request pacing (between IDs)
-	Delay       time.Duration // base delay between requests
-	Jitter      time.Duration // uniform jitter in [-Jitter, +Jitter]
-	BurstSize   int           // 0 disables
-	BurstRest   time.Duration // rest after each burst
-	BurstJitter time.Duration // jitter for BurstRest
+	Delay       time.Duration
+	Jitter      time.Duration
+	BurstSize   int
+	BurstRest   time.Duration
+	BurstJitter time.Duration
 
-	// Robustness / retries (within the same ID)
-	Retries  int           // number of additional attempts (0 = single attempt)
-	RetryMin time.Duration // min backoff between attempts
-	RetryMax time.Duration // max backoff between attempts
+	// Retries (within same ID)
+	Retries  int
+	RetryMin time.Duration
+	RetryMax time.Duration
 
 	// UA rotation
-	UserAgents []string // rotate per request; if empty, DefaultUAs used
+	UserAgents []string
 
 	// Optional debug logger; if nil, no logs.
 	Logf func(format string, args ...any)
 }
 
 // Request is the payload for batch resolution.
-type Request struct {
-	IDs []string
-}
+type Request struct{ IDs []string }
 
 // Profile is the result for a single ID.
 type Profile struct {
@@ -152,15 +146,15 @@ type Profile struct {
 	Handle      string
 	DisplayName string
 	FromURL     string
-	Err         string // empty if success
+	Err         string
 }
 
-// Renderer abstracts how HTML is obtained (exec Chrome vs. mock in tests).
+// Renderer abstracts how HTML is obtained.
 type Renderer interface {
 	Render(ctx context.Context, userAgent, url string, vtBudgetMS int, chromePath string) (string, error)
 }
 
-// ChromeRenderer uses a headless Chrome process.
+// ChromeRenderer uses a headless Chrome process (modern flags only).
 type ChromeRenderer struct{}
 
 func NewChromeRenderer() *ChromeRenderer { return &ChromeRenderer{} }
@@ -177,148 +171,124 @@ func (renderer *ChromeRenderer) Render(ctx context.Context, userAgent, url strin
 	}
 	trimmedUserAgent := strings.TrimSpace(userAgent)
 
-	// --- Stable allocator flags (no DefaultExecAllocatorOptions) ---
-	// We prefer legacy headless + software GL for stability on macOS.
-	allocatorOptions := []chromedp.ExecAllocatorOption{
-		// Legacy headless (boolean) – avoids renderer crash seen on macOS with headless=new.
-		chromedp.Flag(chromeHeadlessFlagKey, true),
+	// Fast fail if Chrome path is set but invalid (keeps tests deterministic).
+	if err := validateChromeBinary(chromePath); err != nil {
+		return "", err
+	}
 
-		// Disable GPU and use SwiftShader (software GL).
-		chromedp.Flag("disable-gpu", true),
-		chromedp.Flag("use-gl", "swiftshader"),
+	// --- Modern, 2025-friendly flags ---
+	opts := []chromedp.ExecAllocatorOption{
+		// Headless "new" is the default & non-deprecated mode.
+		chromedp.Flag(chromeHeadlessFlagKey, chromeHeadlessModeNewValue),
 
-		// Reduce noise / prompts / logs.
+		// Keep logs silent/no prompts; no GL/GPU legacy knobs.
 		chromedp.Flag(chromeDisableDevShmUsageFlagKey, true),
-		chromedp.Flag(chromeRemoteAllowOriginsFlagKey, chromeRemoteAllowOriginsValue),
-		chromedp.Flag(chromeHideScrollbarsFlagKey, true),
 		chromedp.Flag(chromeNoFirstRunFlagKey, true),
 		chromedp.Flag(chromeNoDefaultBrowserCheckFlagKey, true),
+		chromedp.Flag(chromeDisableExtensionsFlagKey, true),
+		chromedp.Flag(chromeDisableComponentExtensionsBackground, true),
+		chromedp.Flag(chromeDisableBlinkFeaturesFlagKey, chromeAutomationControlledBlinkValue),
+		chromedp.Flag(chromeIgnoreCertificateErrorsFlag, true),
 		chromedp.Flag(chromeLogLevelFlagKey, chromeSilentLogLevelValue),
 		chromedp.Flag(chromeSilentFlagKey, true),
 		chromedp.Flag(chromeDisableLoggingFlagKey, true),
-		chromedp.Flag(chromeIgnoreCertificateErrorsFlag, true),
-		chromedp.Flag(chromeVirtualTimeBudgetFlagKey, strconv.Itoa(effectiveBudget)),
 
-		// Reduce automation hints.
-		chromedp.Flag(chromeEnableAutomationFlagKey, false),
-		chromedp.Flag(chromeDisableBlinkFeaturesFlagKey, chromeAutomationControlledBlinkValue),
-		chromedp.Flag(chromeDisableExtensionsFlagKey, true),
-		chromedp.Flag(chromeDisableComponentExtensionsBackgroundFlagKey, true),
+		// Make sure CDP virtual time budget is honored.
+		chromedp.Flag(chromeVirtualTimeBudgetFlagKey, strconv.Itoa(effectiveBudget)),
 	}
 
-	// Sandbox flags only for Linux containers (not needed on macOS/Windows).
-	if runtime.GOOS == "linux" {
-		allocatorOptions = append(allocatorOptions,
+	// Optional Linux sandbox relaxation (only if you ask for it).
+	// Export CHROME_NO_SANDBOX=1 when running inside locked-down containers.
+	if runtime.GOOS == "linux" && os.Getenv("CHROME_NO_SANDBOX") == "1" {
+		opts = append(opts,
 			chromedp.Flag("no-sandbox", true),
 			chromedp.Flag("disable-setuid-sandbox", true),
 		)
 	}
 
-	// Optional override via env:
-	//   XRESOLVER_HEADLESS_MODE=legacy|new
-	//   XRESOLVER_HEADLESS_GPU=0|1
-	switch strings.ToLower(strings.TrimSpace(os.Getenv("XRESOLVER_HEADLESS_MODE"))) {
-	case "new":
-		// Switch to headless=new (remove boolean headless, turn GPU back on unless XRESOLVER_HEADLESS_GPU=0).
-		allocatorOptions = append(allocatorOptions,
-			chromedp.Flag(chromeHeadlessFlagKey, chromeHeadlessModeNewValue),
-		)
-	}
-	if os.Getenv("XRESOLVER_HEADLESS_GPU") == "1" {
-		allocatorOptions = append(allocatorOptions,
-			chromedp.Flag("disable-gpu", false),
-			chromedp.Flag("use-gl", "angle"),
-		)
-	}
-
-	if proxyValue := chromeProxyServerValue(trimmedURL); proxyValue != "" {
-		allocatorOptions = append(allocatorOptions, chromedp.Flag(chromeProxyServerFlagKey, proxyValue))
+	if proxy := chromeProxyServerValue(trimmedURL); proxy != "" {
+		opts = append(opts, chromedp.Flag(chromeProxyServerFlagKey, proxy))
 	}
 	if trimmedUserAgent != "" {
-		allocatorOptions = append(allocatorOptions, chromedp.Flag(chromeUserAgentFlagKey, trimmedUserAgent))
+		opts = append(opts, chromedp.Flag(chromeUserAgentFlagKey, trimmedUserAgent))
 	}
 	if p := strings.TrimSpace(chromePath); p != "" {
-		allocatorOptions = append(allocatorOptions, chromedp.ExecPath(p))
+		opts = append(opts, chromedp.ExecPath(p))
 	}
 
-	allocatorCtx, cancelAllocator := chromedp.NewExecAllocator(ctx, allocatorOptions...)
-	defer cancelAllocator()
+	allocCtx, cancelAlloc := chromedp.NewExecAllocator(ctx, opts...)
+	defer cancelAlloc()
 
-	chromeLogPrinter := logFunctionFromContext(ctx)
-	contextOptions := []chromedp.ContextOption{}
-	if chromeLogPrinter != nil {
-		contextOptions = append(contextOptions,
-			chromedp.WithLogf(chromeLogPrinter),
-			chromedp.WithErrorf(chromeLogPrinter),
-			chromedp.WithDebugf(chromeLogPrinter),
-		)
+	// Create an isolated browser context for this run.
+	logf := logFunctionFromContext(ctx)
+	copts := []chromedp.ContextOption{}
+	if logf != nil {
+		copts = append(copts, chromedp.WithLogf(logf), chromedp.WithErrorf(logf), chromedp.WithDebugf(logf))
 	}
-	chromeCtx, cancelChrome := chromedp.NewContext(allocatorCtx, contextOptions...)
+	chromeCtx, cancelChrome := chromedp.NewContext(allocCtx, copts...)
 	defer cancelChrome()
 
-	if chromeLogPrinter != nil {
-		requestURLByID := map[network.RequestID]string{}
-		var requestMapMutex sync.Mutex
-		chromedp.ListenTarget(chromeCtx, func(event any) {
-			switch typedEvent := event.(type) {
+	// Useful network/target logs (only if logger provided).
+	if logf != nil {
+		reqURLByID := map[network.RequestID]string{}
+		var mu sync.Mutex
+		chromedp.ListenTarget(chromeCtx, func(ev any) {
+			switch e := ev.(type) {
 			case *network.EventRequestWillBeSent:
-				requestMapMutex.Lock()
-				requestURLByID[typedEvent.RequestID] = typedEvent.Request.URL
-				requestMapMutex.Unlock()
-				chromeLogPrinter(chromeLogNetworkRequestMessage, typedEvent.Request.URL)
+				mu.Lock()
+				reqURLByID[e.RequestID] = e.Request.URL
+				mu.Unlock()
+				logf(chromeLogNetworkRequestMessage, e.Request.URL)
 			case *network.EventResponseReceived:
-				requestMapMutex.Lock()
-				requestURL := requestURLByID[typedEvent.RequestID]
-				if requestURL == "" {
-					requestURL = typedEvent.Response.URL
+				mu.Lock()
+				u := reqURLByID[e.RequestID]
+				if u == "" {
+					u = e.Response.URL
 				}
-				requestMapMutex.Unlock()
-				chromeLogPrinter(chromeLogNetworkResponseMessage, requestURL, int(typedEvent.Response.Status))
+				mu.Unlock()
+				logf(chromeLogNetworkResponseMessage, u, int(e.Response.Status))
 			case *network.EventLoadingFailed:
-				requestMapMutex.Lock()
-				requestURL := requestURLByID[typedEvent.RequestID]
-				requestMapMutex.Unlock()
-				chromeLogPrinter(chromeLogNetworkFailureMessage, requestURL, typedEvent.ErrorText, typedEvent.Canceled)
+				mu.Lock()
+				u := reqURLByID[e.RequestID]
+				mu.Unlock()
+				logf(chromeLogNetworkFailureMessage, u, e.ErrorText, e.Canceled)
 			case *target.EventTargetCrashed:
-				chromeLogPrinter(chromeLogTargetCrashMessage)
+				logf(chromeLogTargetCrashMessage)
 			}
 		})
 	}
 
-	var htmlContent string
-	renderTasks := chromedp.Tasks{
+	var html string
+	tasks := chromedp.Tasks{
 		chromedp.ActionFunc(enableNetworkAndSetHeaders),
 		chromedp.ActionFunc(disableAutomationDetection),
 		chromedp.ActionFunc(applyStealthScripts),
 	}
 	if trimmedUserAgent != "" {
 		ua := trimmedUserAgent
-		renderTasks = append(renderTasks, chromedp.ActionFunc(func(c context.Context) error {
+		tasks = append(tasks, chromedp.ActionFunc(func(c context.Context) error {
 			return applyUserAgentOverride(c, ua)
 		}))
 	}
-	if chromeLogPrinter != nil {
-		chromeLogPrinter(chromeLogNavigationStartMessage, trimmedUserAgent, trimmedURL)
+	if logf != nil {
+		logf(chromeLogNavigationStartMessage, trimmedUserAgent, trimmedURL)
 	}
-	renderTasks = append(renderTasks,
+	tasks = append(tasks,
 		chromedp.Navigate(trimmedURL),
-		// We poll readyState instead of relying on lifecycle events (avoids Page.setLifecycleEventsEnabled timing).
 		chromedp.ActionFunc(waitForDocumentReadyStateComplete),
-		chromedp.ActionFunc(func(c context.Context) error {
-			return readDocumentOuterHTML(c, &htmlContent)
-		}),
+		chromedp.ActionFunc(func(c context.Context) error { return readDocumentOuterHTML(c, &html) }),
 	)
 
-	if err := chromedp.Run(chromeCtx, renderTasks...); err != nil {
-		if chromeLogPrinter != nil {
-			chromeLogPrinter(chromeLogNavigationErrorMessage, trimmedURL, err)
+	if err := chromedp.Run(chromeCtx, tasks...); err != nil {
+		if logf != nil {
+			logf(chromeLogNavigationErrorMessage, trimmedURL, err)
 		}
 		return "", err
 	}
-	if chromeLogPrinter != nil {
-		chromeLogPrinter(chromeLogNavigationSuccessMessage, trimmedURL, len(htmlContent))
+	if logf != nil {
+		logf(chromeLogNavigationSuccessMessage, trimmedURL, len(html))
 	}
-	return htmlContent, nil
+	return html, nil
 }
 
 // Service resolves X/Twitter user IDs to handles (and display names).
@@ -376,13 +346,11 @@ func (s *Service) ResolveBatch(ctx context.Context, req Request) []Profile {
 
 		processed++
 
-		// pacing with jitter
 		if sleep := s.jitterDuration(s.cfg.Delay, s.cfg.Jitter); sleep > 0 {
 			if !s.sleepCtx(ctx, sleep) {
 				return results
 			}
 		}
-		// burst rest
 		if s.cfg.BurstSize > 0 && processed%s.cfg.BurstSize == 0 {
 			if rest := s.jitterDuration(s.cfg.BurstRest, s.cfg.BurstJitter); rest > 0 {
 				if !s.sleepCtx(ctx, rest) {
@@ -399,9 +367,9 @@ func (s *Service) resolveWithRetries(ctx context.Context, id string) Profile {
 		"https://x.com/intent/user?user_id=" + id,
 		"https://x.com/i/user/" + id,
 	}
-
 	attempts := s.cfg.Retries + 1
 	var lastErr error
+
 	for attempt := 0; attempt < attempts; attempt++ {
 		for _, url := range candidates {
 			select {
@@ -419,12 +387,19 @@ func (s *Service) resolveWithRetries(ctx context.Context, id string) Profile {
 			attemptCtx := ctx
 			var cancel context.CancelFunc
 			if s.cfg.AttemptTimeout > 0 {
-				attemptCtx, cancel = context.WithTimeout(ctx, s.cfg.AttemptTimeout)
+				// Ensure the attempt time comfortably covers the virtual-time budget.
+				min := time.Duration(s.cfg.VirtualTimeBudgetMS)*time.Millisecond + 3*time.Second
+				at := s.cfg.AttemptTimeout
+				if at < min {
+					at = min
+				}
+				attemptCtx, cancel = context.WithTimeout(ctx, at)
 			}
 			renderCtx := attemptCtx
 			if s.cfg.Logf != nil {
 				renderCtx = withLogFunction(attemptCtx, s.cfg.Logf)
 			}
+
 			started := time.Now()
 			htmlDoc, err := s.renderer.Render(renderCtx, ua, url, s.cfg.VirtualTimeBudgetMS, s.cfg.ChromePath)
 			if cancel != nil {
@@ -451,24 +426,18 @@ func (s *Service) resolveWithRetries(ctx context.Context, id string) Profile {
 					s.cfg.Logf("id=%s attempt=%d url=%s elapsed=%v OK handle=%s",
 						id, attempt+1, url, time.Since(started), handle)
 				}
-				return Profile{
-					ID:          id,
-					Handle:      handle,
-					DisplayName: display,
-					FromURL:     url,
-				}
+				return Profile{ID: id, Handle: handle, DisplayName: display, FromURL: url}
 			}
 			lastErr = fmt.Errorf("no handle found")
 		}
 
-		// backoff before next attempt if we still have time
 		if attempt < attempts-1 {
-			sleep := s.backoffDuration(attempt)
-			if sleep > 0 && !s.sleepCtx(ctx, sleep) {
+			if sleep := s.backoffDuration(attempt); sleep > 0 && !s.sleepCtx(ctx, sleep) {
 				return Profile{ID: id, Err: ctx.Err().Error()}
 			}
 		}
 	}
+
 	msg := "unresolvable"
 	if lastErr != nil {
 		msg = lastErr.Error()
@@ -480,11 +449,9 @@ func (s *Service) pickUA() string {
 	if len(s.cfg.UserAgents) == 0 {
 		return s.defaultChromeUserAgent()
 	}
-	idx := s.randIntn(len(s.cfg.UserAgents))
-	return s.cfg.UserAgents[idx]
+	return s.cfg.UserAgents[s.randIntn(len(s.cfg.UserAgents))]
 }
 
-// DefaultChromeUserAgent returns a reasonable UA when none provided.
 func DefaultChromeUserAgent(r *rand.Rand) string {
 	if r == nil {
 		r = rand.New(rand.NewSource(time.Now().UnixNano()))
@@ -521,12 +488,9 @@ func (s *Service) sleepCtx(ctx context.Context, d time.Duration) bool {
 	}
 }
 
-// Simple backoff between retry attempts: grow from RetryMin toward RetryMax.
 func (s *Service) backoffDuration(attempt int) time.Duration {
-	min := s.cfg.RetryMin
-	max := s.cfg.RetryMax
+	min, max := s.cfg.RetryMin, s.cfg.RetryMax
 	if min <= 0 && max <= 0 {
-		// sensible default
 		min, max = 400*time.Millisecond, 1500*time.Millisecond
 	}
 	if min <= 0 {
@@ -535,13 +499,11 @@ func (s *Service) backoffDuration(attempt int) time.Duration {
 	if max < min {
 		max = min
 	}
-	// linear-ish growth clipped to [min,max]
 	scale := 1.0 + float64(attempt)
 	d := time.Duration(float64(min) * scale)
 	if d > max {
 		d = max
 	}
-	// add small jitter (+/- 25%)
 	j := time.Duration(0.25 * float64(d))
 	offset := (s.randFloat64()*2 - 1) * float64(j)
 	return time.Duration(float64(d) + offset)
@@ -638,6 +600,10 @@ func disableAutomationDetection(chromedpCtx context.Context) error {
 }
 
 func applyStealthScripts(chromedpCtx context.Context) error {
+	// Page must be enabled before injecting scripts for cross-version stability.
+	if err := page.Enable().Do(chromedpCtx); err != nil {
+		return err
+	}
 	for _, script := range stealthScripts {
 		if _, err := page.AddScriptToEvaluateOnNewDocument(script).Do(chromedpCtx); err != nil {
 			return err
@@ -658,42 +624,41 @@ func applyUserAgentOverride(chromedpCtx context.Context, userAgent string) error
 }
 
 func waitForDocumentReadyStateComplete(chromedpCtx context.Context) error {
-	ticker := time.NewTicker(documentReadyStatePollInterval)
-	defer ticker.Stop()
+	t := time.NewTicker(documentReadyStatePollInterval)
+	defer t.Stop()
 
-	var lastEvaluationError error
+	var lastErr error
 	for {
-		var readyStateValue string
-		evaluationErr := chromedp.Evaluate(documentReadyStateScript, &readyStateValue, chromedp.EvalAsValue).Do(chromedpCtx)
-		if evaluationErr == nil {
-			lastEvaluationError = nil
-			if strings.EqualFold(strings.TrimSpace(readyStateValue), documentReadyStateCompleteValue) {
+		var s string
+		err := chromedp.Evaluate(documentReadyStateScript, &s, chromedp.EvalAsValue).Do(chromedpCtx)
+		if err == nil {
+			lastErr = nil
+			if strings.EqualFold(strings.TrimSpace(s), documentReadyStateCompleteValue) {
 				return nil
 			}
 		} else {
-			lastEvaluationError = evaluationErr
+			lastErr = err
 		}
-
 		select {
 		case <-chromedpCtx.Done():
-			if lastEvaluationError != nil {
-				return lastEvaluationError
+			if lastErr != nil {
+				return lastErr
 			}
 			return chromedpCtx.Err()
-		case <-ticker.C:
+		case <-t.C:
 		}
 	}
 }
 
-func readDocumentOuterHTML(chromedpCtx context.Context, htmlContentDestination *string) error {
-	if htmlContentDestination == nil {
+func readDocumentOuterHTML(chromedpCtx context.Context, dst *string) error {
+	if dst == nil {
 		return fmt.Errorf(documentOuterHTMLNilDestinationError)
 	}
-	var documentOuterHTML string
-	if err := chromedp.Evaluate(documentOuterHTMLScript, &documentOuterHTML, chromedp.EvalAsValue).Do(chromedpCtx); err != nil {
+	var html string
+	if err := chromedp.Evaluate(documentOuterHTMLScript, &html, chromedp.EvalAsValue).Do(chromedpCtx); err != nil {
 		return err
 	}
-	*htmlContentDestination = documentOuterHTML
+	*dst = html
 	return nil
 }
 
@@ -712,14 +677,14 @@ func navigatorPlatformForUserAgent(userAgent string) string {
 }
 
 func userAgentMetadataFromUserAgent(userAgent string) *emulation.UserAgentMetadata {
-	majorVersion, fullVersion := extractChromeVersions(userAgent)
-	if majorVersion == "" || fullVersion == "" {
+	major, full := extractChromeVersions(userAgent)
+	if major == "" || full == "" {
 		return nil
 	}
 	pd := platformDetailsFromUserAgent(userAgent)
 	return &emulation.UserAgentMetadata{
-		Brands:          majorBrandVersions(majorVersion),
-		FullVersionList: fullVersionBrandList(fullVersion),
+		Brands:          majorBrandVersions(major),
+		FullVersionList: fullVersionBrandList(full),
 		Platform:        pd.platform,
 		PlatformVersion: pd.platformVersion,
 		Architecture:    pd.architecture,
@@ -773,8 +738,8 @@ func extractChromeVersions(userAgent string) (string, string) {
 		return "", ""
 	}
 	section := userAgent[i+len(userAgentChromeMarker):]
-	delim := indexOfVersionDelimiter(section)
-	val := strings.TrimSpace(section[:delim])
+	d := indexOfVersionDelimiter(section)
+	val := strings.TrimSpace(section[:d])
 	if val == "" {
 		return "", ""
 	}
@@ -807,8 +772,8 @@ func parseVersionAfterToken(userAgent, token string) string {
 		return ""
 	}
 	section := userAgent[i+len(token):]
-	delim := indexOfVersionDelimiter(section)
-	return strings.TrimSpace(section[:delim])
+	d := indexOfVersionDelimiter(section)
+	return strings.TrimSpace(section[:d])
 }
 
 func indexOfVersionDelimiter(section string) int {
@@ -860,12 +825,12 @@ func chromeProxyServerValue(targetURL string) string {
 	if u == "" {
 		return ""
 	}
-	parsedURL, err := neturl.Parse(u)
-	if err != nil || parsedURL.Scheme == "" || parsedURL.Host == "" {
+	parsed, err := neturl.Parse(u)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
 		return ""
 	}
-	proxy := firstNonEmptyEnvValue(proxyEnvironmentKeys(parsedURL.Scheme)...)
-	if proxy == "" && parsedURL.Scheme == "https" {
+	proxy := firstNonEmptyEnvValue(proxyEnvironmentKeys(parsed.Scheme)...)
+	if proxy == "" && parsed.Scheme == "https" {
 		proxy = firstNonEmptyEnvValue(proxyEnvironmentKeys("http")...)
 	}
 	if proxy == "" {
@@ -874,7 +839,7 @@ func chromeProxyServerValue(targetURL string) string {
 	if proxy == "" {
 		return ""
 	}
-	if bypassProxy(parsedURL, firstNonEmptyEnvValue(noProxyEnvironmentUpper, noProxyEnvironmentLower)) {
+	if bypassProxy(parsed, firstNonEmptyEnvValue(noProxyEnvironmentUpper, noProxyEnvironmentLower)) {
 		return ""
 	}
 	pp, perr := neturl.Parse(proxy)
@@ -921,7 +886,6 @@ func bypassProxy(targetURL *neturl.URL, noProxyList string) bool {
 	if host == "" {
 		return false
 	}
-
 	for _, entry := range strings.Split(noProxyList, ",") {
 		e := strings.TrimSpace(entry)
 		if e == "" {
@@ -974,4 +938,17 @@ func errStr(err error) string {
 		return ""
 	}
 	return err.Error()
+}
+
+// --- local helpers ---
+
+func validateChromeBinary(path string) error {
+	p := strings.TrimSpace(path)
+	if p == "" {
+		return nil // let chromedp find Chrome on PATH
+	}
+	if _, err := os.Stat(p); err != nil {
+		return fmt.Errorf("chrome binary not found at %q: %v", p, err)
+	}
+	return nil
 }

@@ -101,8 +101,8 @@ func main() {
 		}
 	}
 
-	// Construct service with a Chrome renderer.
-	svc := xresolver.NewService(cfg, xresolver.NewChromeRenderer())
+	// Always use the remote-allocator renderer.
+	svc := xresolver.NewService(cfg, xresolver.NewRemoteChromedpRenderer())
 
 	// Cancel on SIGINT/SIGTERM
 	rootCtx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
