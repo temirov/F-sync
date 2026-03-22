@@ -1,0 +1,1073 @@
+diff --git a/cmd/dump/README.md b/cmd/dump/README.md
+deleted file mode 100644
+index e5a9aaf..0000000
+--- a/cmd/dump/README.md
++++ /dev/null
+@@ -1,207 +0,0 @@
+-# Twitter Relationship Matrix
+-
+-Generate an offline, human-readable HTML “relationship matrix” by comparing two X/Twitter data-export archives. See at a
+-glance who is a **Friend** (mutual), **Leader** (you follow them, they don’t follow you), **Groupie** (they follow you,
+-you don’t follow them), plus **diffs** (who B follows that A doesn’t) and **blocked/muted** cross-matches. The tool
+-resolves missing handles by launching headless Chrome and following redirects on twitter.com, so ensure that network
+-access and a Chrome/Chromium binary (exposed via `PATH` or `CHROME_BIN`) are available.
+-
+----
+-
+-## Why this exists
+-
+-* **Mostly local, privacy-aware**: Works on your exported data (`.zip`) and only reaches out to twitter.com to fill
+-  missing handles using short-lived headless Chrome sessions.
+-* **Actionable overview**: Summaries + categorized lists with direct profile/intent links.
+-* **Deterministic**: Plain Go code, no heuristics beyond consistent parsing rules.
+-
+----
+-
+-## What it produces
+-
+-One self-contained HTML file (default `twitter_relationship_matrix.html`) with:
+-
+-1. **Overview** (per owner): totals for Followers, Following, Friends, Leaders, Groupies, Muted, Blocked.
+-2. **Relationship Matrix** (per owner):
+-
+-    * **Friends** — mutual follow
+-    * **Leaders** — you follow, they don’t follow back
+-    * **Groupies** — they follow you, you don’t follow back
+-3. **Diff**: “B follows that A doesn’t” — a quick way to clone follow lists.
+-4. **Blocked sections** (per owner): Blocked ∩ Following, Blocked ∩ Followers, all Blocked.
+-5. **Badges**:
+-
+-    * `ID only` when the export lacks a handle/display name
+-    * `Muted` when present in `mute.js`
+-    * `Blocked` when present in `block.js`
+-
+-Numbers and names are clickable; “Follow” buttons use the standard Twitter intent URLs.
+-
+----
+-
+-## Inputs
+-
+-Two official X/Twitter **data export ZIPs** (e.g., the kind you request from your account). The program parses:
+-
+-* `manifest.js` — owner identity and exact file paths
+-* `following.js` — accounts the owner follows
+-* `follower.js` — accounts following the owner
+-* `mute.js` — muted account list
+-* `block.js` — blocked account list
+-
+-The parser tolerates typical “JS wrapper + JSON” formats in exports.
+-
+----
+-
+-## How it works (architecture)
+-
+-### High-level flow
+-
+-1. **Load archives** (two ZIPs):
+-
+-    * Read `manifest.js` to discover canonical paths of data files.
+-    * Lazily extract `following.js`, `follower.js`, `mute.js`, `block.js` (fallback by basename if needed).
+-2. **Normalize records**:
+-
+-    * Each account is `AccountRecord{AccountID, UserName, DisplayName}`.
+-    * If `accountId` is missing but a `userLink` exists, extract the numeric ID via regex.
+-3. **Classify relationships** (per owner):
+-
+-    * **Friends**: `Following ∩ Followers`
+-    * **Leaders**: `Following − Followers`
+-    * **Groupies**: `Followers − Following`
+-4. **Compute diffs**: accounts that **B follows** and **A does not**.
+-5. **Resolve labels for blocked lists**: prefer labels from the owner’s Following/Followers; otherwise borrow from the
+-   other archive; otherwise show numeric ID.
+-6. **Render HTML**:
+-
+-    * Pure string builder, no templating engine.
+-    * Styles come from `cssBase.css` (embedded via `//go:embed`).
+-
+-### Principles
+-
+-* **Use official export data only** — no scraping or live API calls.
+-* **Conservative parsing** — tolerate minor export formatting differences.
+-* **Deterministic output** — sorted, stable ordering (display name → handle → ID).
+-* **Separation of concerns** — logic in Go, presentation in a small embedded CSS file.
+-* **Legibility over cleverness** — descriptive identifiers; avoid single-letter variables.
+-
+----
+-
+-## Build & run
+-
+-### Requirements
+-
+-* Go 1.21+ (or recent)
+-* Two X/Twitter export ZIPs (for “Account A” and “Account B”)
+-* Google Chrome or Chromium installed and discoverable via `PATH` or the `CHROME_BIN` environment variable
+-
+-### Build
+-
+-```bash
+-go build -o twitter_matrix .
+-```
+-
+-### Run
+-
+-```bash
+-./twitter_matrix \
+-  --zip-a /path/to/accountA_export.zip \
+-  --zip-b /path/to/accountB_export.zip \
+-  --out twitter_relationship_matrix.html
+-```
+-
+-* `--zip-a` Path to the first export ZIP (treated as **A**)
+-* `--zip-b` Path to the second export ZIP (treated as **B**)
+-* `--out`  Output HTML file (default: `twitter_relationship_matrix.html`)
+-
+-Open the resulting HTML in your browser.
+-
+----
+-
+-### Handle resolution (built-in)
+-
+-Some exports omit screen names for deactivated or protected accounts. The CLI now resolves those gaps automatically: it
+-performs HTTPS HEAD/GET requests to `https://twitter.com/i/user/<account_id>` and inspects the redirect to recover the
+-handle. It then fetches the redirected page title to extract a display name when available. When individual lookups
+-fail, the program prints warnings to `stderr` and continues rendering with numeric IDs.
+-
+-* Requests use conservative timeouts and never follow more than the initial redirect.
+-* A bounded worker pool (default 8 workers) fans out requests so large exports finish promptly without hammering
+-  twitter.com.
+-* Results are cached for the lifetime of the process, so repeated IDs are only fetched once.
+-
+----
+-
+-## UI notes & customization
+-
+-* **Tiny matrix numbers**: IDs in matrix lists are intentionally small to fit many rows.
+-  Tweak in `cssBase.css`:
+-
+-  ```css
+-  .matrix li { font-size:10px; line-height:1.2; }
+-  ```
+-* **Responsive layout**: On narrow screens, the grid collapses to a single column.
+-* **Badges & buttons**: Adjust `.badge`, `.btn` rules in `cssBase.css` to taste.
+-
+-All CSS is embedded at build time via:
+-
+-```go
+-//go:embed base.css
+-var cssBase string
+-```
+-
+-So edits to `base.css` are picked up on the next build.
+-
+----
+-
+-## Edge cases & troubleshooting
+-
+-* **“no follower.js or following.js found in zip”**
+-  The export may be incomplete or in a different layout. Re-request the data export from X/Twitter and ensure the ZIP
+-  contains the files listed above (paths are discovered via `manifest.js`).
+-* **Many “ID only” badges**
+-  Some exports omit handles/display names in certain records. The tool falls back to numeric IDs; clicking still opens
+-  the correct profile.
+-* **Very large lists**
+-  Rendering is plain HTML; modern browsers handle thousands of rows fine, but you can reduce font size further or narrow
+-  sections in CSS.
+-* **Cross-account labeling**
+-  Blocked lists try to borrow labels from both archives for better readability. If neither has a label, numeric ID is
+-  shown.
+-
+----
+-
+-## Security & privacy
+-
+-* Operates on local files and performs outbound HTTPS lookups to twitter.com for missing handle lookups.
+-* Does not write anything except the single HTML output file.
+-* No token storage, no persistent cache.
+-
+----
+-
+-## File layout (key files)
+-
+-```
+-.
+-├─ main.go          # entry point: flag parsing, reading zips, rendering
+-├─ cssBase.css      # small stylesheet, embedded via //go:embed
+-```
+-
+----
+-
+-## Flags (quick reference)
+-
+-| Flag      | Type   | Required | Description                             |
+-|-----------|--------|----------|-----------------------------------------|
+-| `--zip-a` | string | Yes      | Path to Account A export ZIP            |
+-| `--zip-b` | string | Yes      | Path to Account B export ZIP            |
+-| `--out`   | string | No       | Output HTML path (default: shown above) |
+-
+----
+-
+-## Roadmap ideas
+-
+-* Export CSVs per bucket (Friends/Leaders/Groupies/Diffs).
+-* Toggle sections on/off in UI.
+-* Optional JSON output for automation.
+diff --git a/cmd/dump/base.css b/cmd/dump/base.css
+deleted file mode 100644
+index cea3b0b..0000000
+--- a/cmd/dump/base.css
++++ /dev/null
+@@ -1,151 +0,0 @@
+-body {
+-    font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, sans-serif;
+-    margin: 24px;
+-    line-height: 1.45
+-}
+-
+-h1, h2, h3 {
+-    margin: 0 0 12px
+-}
+-
+-header p, footer p {
+-    color: #555
+-}
+-
+-.grid {
+-    display: grid;
+-    grid-template-columns:1fr 1fr;
+-    gap: 16px
+-}
+-
+-.matrix {
+-    display: grid;
+-    grid-template-columns:1fr 1fr 1fr;
+-    gap: 16px
+-}
+-
+-.cell {
+-    border: 1px solid #ddd;
+-    border-radius: 8px;
+-    padding: 12px;
+-    min-height: 80px
+-}
+-
+-.sub {
+-    margin: 16px 0 8px 0
+-}
+-
+-ul {
+-    margin: 8px 0 0 0;
+-    padding: 0;
+-    list-style: none
+-}
+-
+-.account-list {
+-    margin-top: 12px
+-}
+-
+-.account-card {
+-    display: flex;
+-    flex-direction: column;
+-    align-items: flex-start;
+-    gap: 4px;
+-    padding: 10px 0;
+-    border-bottom: 1px solid #e6e6e6
+-}
+-
+-.account-card:last-child {
+-    border-bottom: none
+-}
+-
+-.account-card-main {
+-    display: flex;
+-    flex-direction: column;
+-    gap: 2px;
+-    width: 100%
+-}
+-
+-.account-card-link {
+-    color: inherit;
+-    text-decoration: none
+-}
+-
+-.account-card-link:hover .account-display {
+-    text-decoration: underline
+-}
+-
+-.account-display {
+-    font-weight: 600;
+-    font-size: 14px;
+-    color: #1c1c1c
+-}
+-
+-.account-handle {
+-    font-size: 12px;
+-    color: #5f6368
+-}
+-
+-.account-meta {
+-    display: flex;
+-    flex-wrap: wrap;
+-    align-items: center;
+-    gap: 8px;
+-    font-size: 11px;
+-    color: #333
+-}
+-
+-a {
+-    text-decoration: none
+-}
+-
+-a:hover {
+-    text-decoration: underline
+-}
+-
+-.btn {
+-    display: inline-block;
+-    padding: 2px 8px;
+-    border: 1px solid #ccc;
+-    border-radius: 12px;
+-    font-size: 12px;
+-    text-decoration: none
+-}
+-
+-.btn:hover {
+-    background: #f5f5f5
+-}
+-
+-.account-meta .btn {
+-    margin-left: 0
+-}
+-
+-.muted {
+-    color: #777;
+-    font-size: 12px
+-}
+-
+-.badge {
+-    display: inline-block;
+-    padding: 2px 8px;
+-    border-radius: 999px;
+-    font-size: 11px;
+-    font-weight: 600;
+-    background: #f2f3f5;
+-    color: #333
+-}
+-
+-.badge-muted {
+-    background: #e8edff;
+-    color: #4257b2
+-}
+-
+-.badge-block {
+-    background: #fde8e7;
+-    color: #b42318
+-}
+-
+-@media (max-width: 900px) {
+-    .grid, .matrix {
+-        grid-template-columns:1fr
+-    }
+-}
+diff --git a/cmd/dump/main.go b/cmd/dump/main.go
+deleted file mode 100644
+index ea9533a..0000000
+--- a/cmd/dump/main.go
++++ /dev/null
+@@ -1,86 +0,0 @@
+-package main
+-
+-import (
+-	"context"
+-	"flag"
+-	"fmt"
+-	"os"
+-
+-	"github.com/f-sync/fsync/internal/handles"
+-	"github.com/f-sync/fsync/internal/matrix"
+-)
+-
+-const (
+-	flagZipAName                = "zip-a"
+-	flagZipADescription         = "Path to first Twitter data zip"
+-	flagZipBName                = "zip-b"
+-	flagZipBDescription         = "Path to second Twitter data zip"
+-	flagOutName                 = "out"
+-	flagOutDescription          = "Output HTML file path"
+-	defaultOutputFileName       = "twitter_relationship_matrix.html"
+-	missingZipErrorMessage      = "error: both --zip-a and --zip-b are required"
+-	handleResolutionErrorFormat = "warning: handle lookup for %s failed: %v\n"
+-	renderErrorFormat           = "render: %v"
+-	loadErrorFormat             = "read %s: %v"
+-	createFileErrorFormat       = "create %s: %v"
+-	writeFileErrorFormat        = "write %s: %v"
+-	handlesResolverErrorFormat  = "handles resolver: %v"
+-)
+-
+-func main() {
+-	var zipPathA string
+-	var zipPathB string
+-	var outputPath string
+-
+-	flag.StringVar(&zipPathA, flagZipAName, "", flagZipADescription)
+-	flag.StringVar(&zipPathB, flagZipBName, "", flagZipBDescription)
+-	flag.StringVar(&outputPath, flagOutName, defaultOutputFileName, flagOutDescription)
+-	flag.Parse()
+-
+-	if zipPathA == "" || zipPathB == "" {
+-		fmt.Fprintln(os.Stderr, missingZipErrorMessage)
+-		os.Exit(2)
+-	}
+-
+-	accountSetsA, ownerA, err := matrix.ReadTwitterZip(zipPathA)
+-	if err != nil {
+-		dief(loadErrorFormat, zipPathA, err)
+-	}
+-	accountSetsB, ownerB, err := matrix.ReadTwitterZip(zipPathB)
+-	if err != nil {
+-		dief(loadErrorFormat, zipPathB, err)
+-	}
+-
+-	resolver, err := handles.NewResolver(handles.Config{})
+-	if err != nil {
+-		dief(handlesResolverErrorFormat, err)
+-	}
+-	resolutionErrors := matrix.ResolveHandles(context.Background(), resolver, &accountSetsA, &accountSetsB)
+-	for accountID, resolutionErr := range resolutionErrors {
+-		fmt.Fprintf(os.Stderr, handleResolutionErrorFormat, accountID, resolutionErr)
+-	}
+-
+-	comparison := matrix.BuildComparison(accountSetsA, accountSetsB, ownerA, ownerB)
+-
+-	pageHTML, err := matrix.RenderComparisonPage(matrix.ComparisonPageData{Comparison: &comparison})
+-	if err != nil {
+-		dief(renderErrorFormat, err)
+-	}
+-
+-	file, err := os.Create(outputPath)
+-	if err != nil {
+-		dief(createFileErrorFormat, outputPath, err)
+-	}
+-	defer file.Close()
+-
+-	if _, err := file.WriteString(pageHTML); err != nil {
+-		dief(writeFileErrorFormat, outputPath, err)
+-	}
+-
+-	fmt.Println("Wrote", outputPath)
+-}
+-
+-func dief(format string, args ...any) {
+-	fmt.Fprintf(os.Stderr, format+"\n", args...)
+-	os.Exit(1)
+-}
+diff --git a/cmd/xresolve/main.go b/cmd/xresolve/main.go
+deleted file mode 100644
+index 87a5a9a..0000000
+--- a/cmd/xresolve/main.go
++++ /dev/null
+@@ -1,345 +0,0 @@
+-// Command xresolve: resolve X/Twitter numeric IDs to handles by reading the redirect Location.
+-// Usage:
+-//
+-//	xresolve --in ids.txt --out id_to_handle.csv --concurrency 8 --sleep-ms 125
+-//
+-// ids.txt: one numeric ID per line
+-package main
+-
+-import (
+-	"bufio"
+-	"encoding/csv"
+-	"flag"
+-	"fmt"
+-	"io"
+-	"net/http"
+-	"net/url"
+-	"os"
+-	"runtime"
+-	"strconv"
+-	"strings"
+-	"sync"
+-	"time"
+-
+-	"github.com/f-sync/fsync/internal/intentparser"
+-)
+-
+-type resolveJob struct {
+-	NumericID string
+-	Index     int
+-}
+-
+-type resolveResult struct {
+-	NumericID     string
+-	Handle        string
+-	DisplayName   string
+-	ResolvedAtUTC string
+-	Source        string
+-	ErrorMessage  string
+-	Index         int
+-}
+-
+-const (
+-	redirectBaseURL                 = "https://x.com/i/user/"
+-	intentURLFormat                 = "https://x.com/intent/user?user_id=%s"
+-	locationHeaderName              = "Location"
+-	retryAfterHeaderName            = "Retry-After"
+-	redirectSourceName              = "redirect"
+-	intentSourceName                = "intent"
+-	missingLocationHeaderMessage    = "no Location header"
+-	parseLocationErrorFormat        = "parse Location: %v"
+-	emptyHandleLocationMessage      = "empty handle in Location"
+-	intentStatusErrorFormat         = "intent status: %s"
+-	intentReadBodyErrorFormat       = "read intent body: %v"
+-	intentRequestBuildErrorFormat   = "build intent request: %v"
+-	redirectRequestBuildErrorFormat = "build redirect request: %v"
+-	emptyIntentBodyMessage          = "intent body empty"
+-	latestResolvedMessageFormat     = "Latest resolved: %s"
+-	wroteOutputWithPreviewFormat    = "Wrote %s (%d rows). %s\n"
+-	wroteOutputFormat               = "Wrote %s (%d rows)\n"
+-	displayHandleFormat             = "%s (@%s)"
+-	handleOnlyFormat                = "@%s"
+-	csvColumnID                     = "id"
+-	csvColumnHandle                 = "handle"
+-	csvColumnDisplayName            = "display_name"
+-	csvColumnResolvedAt             = "resolved_at_utc"
+-	csvColumnSource                 = "source"
+-	csvColumnError                  = "error"
+-)
+-
+-var csvHeaderColumns = []string{csvColumnID, csvColumnHandle, csvColumnDisplayName, csvColumnResolvedAt, csvColumnSource, csvColumnError}
+-
+-func main() {
+-	inputPath := flag.String("in", "", "Path to input file with one numeric ID per line")
+-	outputPath := flag.String("out", "id_to_handle.csv", "Output CSV path")
+-	concurrency := flag.Int("concurrency", max(2, runtime.NumCPU()), "Concurrent workers")
+-	sleepMillis := flag.Int("sleep-ms", 125, "Inter-request sleep (milliseconds) per worker")
+-	flag.Parse()
+-
+-	if *inputPath == "" {
+-		fmt.Fprintln(os.Stderr, "missing --in file")
+-		os.Exit(2)
+-	}
+-
+-	numericIDs, readErr := readIDs(*inputPath)
+-	if readErr != nil {
+-		fmt.Fprintln(os.Stderr, readErr)
+-		os.Exit(1)
+-	}
+-	if len(numericIDs) == 0 {
+-		fmt.Fprintln(os.Stderr, "no IDs to resolve")
+-		os.Exit(0)
+-	}
+-
+-	httpClient := &http.Client{
+-		Timeout: 12 * time.Second,
+-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+-			return http.ErrUseLastResponse // we want Location, do not follow
+-		},
+-	}
+-
+-	jobChannel := make(chan resolveJob)
+-	resultChannel := make(chan resolveResult, len(numericIDs))
+-	var waitGroup sync.WaitGroup
+-
+-	for workerIndex := 0; workerIndex < *concurrency; workerIndex++ {
+-		waitGroup.Add(1)
+-		go func() {
+-			defer waitGroup.Done()
+-			for job := range jobChannel {
+-				result := resolveOne(httpClient, job.NumericID)
+-				result.Index = job.Index
+-				resultChannel <- result
+-				time.Sleep(time.Duration(*sleepMillis) * time.Millisecond)
+-			}
+-		}()
+-	}
+-
+-	for idx, id := range numericIDs {
+-		jobChannel <- resolveJob{NumericID: id, Index: idx}
+-	}
+-	close(jobChannel)
+-
+-	go func() {
+-		waitGroup.Wait()
+-		close(resultChannel)
+-	}()
+-
+-	results := make([]resolveResult, len(numericIDs))
+-	for r := range resultChannel {
+-		results[r.Index] = r
+-	}
+-
+-	if writeErr := writeCSV(*outputPath, results); writeErr != nil {
+-		fmt.Fprintln(os.Stderr, writeErr)
+-		os.Exit(1)
+-	}
+-	summaryMessage := latestResolvedSummary(results)
+-	if summaryMessage != "" {
+-		fmt.Printf(wroteOutputWithPreviewFormat, *outputPath, len(results), summaryMessage)
+-	} else {
+-		fmt.Printf(wroteOutputFormat, *outputPath, len(results))
+-	}
+-}
+-
+-func resolveOne(httpClient *http.Client, numericID string) resolveResult {
+-	resolvedAt := time.Now().UTC().Format(time.RFC3339)
+-	result := resolveResult{NumericID: numericID, ResolvedAtUTC: resolvedAt}
+-
+-	redirectHandle, redirectErr := fetchRedirectHandle(httpClient, numericID)
+-	if redirectErr != nil {
+-		result.Source = redirectSourceName
+-		result.ErrorMessage = redirectErr.Error()
+-	} else if redirectHandle != "" {
+-		result.Handle = redirectHandle
+-		result.Source = redirectSourceName
+-		result.ErrorMessage = ""
+-	}
+-
+-	intentHTML, intentErr := fetchIntentHTML(httpClient, numericID)
+-	if intentErr != nil {
+-		if result.Handle == "" {
+-			result.Source = intentSourceName
+-		}
+-		result.ErrorMessage = intentErr.Error()
+-		return result
+-	}
+-
+-	htmlParser := intentparser.NewIntentHTMLParser(intentHTML)
+-	parsedHandle, parseErr := htmlParser.ExtractHandle()
+-	if parseErr != nil {
+-		if result.Handle == "" {
+-			result.Source = intentSourceName
+-		}
+-		result.ErrorMessage = parseErr.Error()
+-		return result
+-	}
+-
+-	result.Handle = parsedHandle
+-	result.DisplayName = htmlParser.ExtractDisplayName(parsedHandle)
+-	result.Source = intentSourceName
+-	result.ErrorMessage = ""
+-	return result
+-}
+-
+-func fetchRedirectHandle(httpClient *http.Client, numericID string) (string, error) {
+-	requestURL := redirectBaseURL + numericID
+-	httpRequest, requestErr := http.NewRequest(http.MethodGet, requestURL, nil)
+-	if requestErr != nil {
+-		return "", fmt.Errorf(redirectRequestBuildErrorFormat, requestErr)
+-	}
+-	httpResponse, httpErr := httpClient.Do(httpRequest)
+-	if httpErr != nil {
+-		return "", httpErr
+-	}
+-	if httpResponse.StatusCode == http.StatusTooManyRequests {
+-		retryAfter := httpResponse.Header.Get(retryAfterHeaderName)
+-		httpResponse.Body.Close()
+-		time.Sleep(backoffFromRetryAfter(retryAfter))
+-		return fetchRedirectHandle(httpClient, numericID)
+-	}
+-	defer httpResponse.Body.Close()
+-
+-	locationHeader := httpResponse.Header.Get(locationHeaderName)
+-	if locationHeader == "" {
+-		return "", fmt.Errorf(missingLocationHeaderMessage)
+-	}
+-	parsedLocation, parseErr := url.Parse(locationHeader)
+-	if parseErr != nil {
+-		return "", fmt.Errorf(parseLocationErrorFormat, parseErr)
+-	}
+-	cleanedPath := strings.Trim(parsedLocation.Path, "/")
+-	pathSegments := strings.Split(cleanedPath, "/")
+-	if len(pathSegments) == 0 || strings.TrimSpace(pathSegments[0]) == "" {
+-		return "", fmt.Errorf(emptyHandleLocationMessage)
+-	}
+-	return pathSegments[0], nil
+-}
+-
+-func fetchIntentHTML(httpClient *http.Client, numericID string) (string, error) {
+-	requestURL := fmt.Sprintf(intentURLFormat, numericID)
+-	httpRequest, requestErr := http.NewRequest(http.MethodGet, requestURL, nil)
+-	if requestErr != nil {
+-		return "", fmt.Errorf(intentRequestBuildErrorFormat, requestErr)
+-	}
+-	httpResponse, httpErr := httpClient.Do(httpRequest)
+-	if httpErr != nil {
+-		return "", httpErr
+-	}
+-	if httpResponse.StatusCode == http.StatusTooManyRequests {
+-		retryAfter := httpResponse.Header.Get(retryAfterHeaderName)
+-		httpResponse.Body.Close()
+-		time.Sleep(backoffFromRetryAfter(retryAfter))
+-		return fetchIntentHTML(httpClient, numericID)
+-	}
+-	defer httpResponse.Body.Close()
+-	if httpResponse.StatusCode >= http.StatusBadRequest {
+-		return "", fmt.Errorf(intentStatusErrorFormat, httpResponse.Status)
+-	}
+-	bodyBytes, readErr := io.ReadAll(httpResponse.Body)
+-	if readErr != nil {
+-		return "", fmt.Errorf(intentReadBodyErrorFormat, readErr)
+-	}
+-	htmlContent := string(bodyBytes)
+-	if strings.TrimSpace(htmlContent) == "" {
+-		return "", fmt.Errorf(emptyIntentBodyMessage)
+-	}
+-	return htmlContent, nil
+-}
+-
+-func latestResolvedSummary(results []resolveResult) string {
+-	for index := len(results) - 1; index >= 0; index-- {
+-		label := formatResultLabel(results[index])
+-		if label != "" {
+-			return fmt.Sprintf(latestResolvedMessageFormat, label)
+-		}
+-	}
+-	return ""
+-}
+-
+-func formatResultLabel(result resolveResult) string {
+-	displayName := strings.TrimSpace(result.DisplayName)
+-	handle := strings.TrimSpace(result.Handle)
+-	switch {
+-	case displayName != "" && handle != "":
+-		return fmt.Sprintf(displayHandleFormat, displayName, handle)
+-	case handle != "":
+-		return fmt.Sprintf(handleOnlyFormat, handle)
+-	case strings.TrimSpace(result.NumericID) != "":
+-		return strings.TrimSpace(result.NumericID)
+-	default:
+-		return ""
+-	}
+-}
+-
+-func readIDs(path string) ([]string, error) {
+-	file, err := os.Open(path)
+-	if err != nil {
+-		return nil, err
+-	}
+-	defer file.Close()
+-	var ids []string
+-	sc := bufio.NewScanner(file)
+-	for sc.Scan() {
+-		line := strings.TrimSpace(sc.Text())
+-		if line == "" {
+-			continue
+-		}
+-		if !isAllDigits(line) {
+-			continue
+-		}
+-		ids = append(ids, line)
+-	}
+-	return ids, sc.Err()
+-}
+-
+-func writeCSV(path string, results []resolveResult) error {
+-	file, err := os.Create(path)
+-	if err != nil {
+-		return err
+-	}
+-	defer file.Close()
+-	w := csv.NewWriter(file)
+-	defer w.Flush()
+-
+-	if err := w.Write(csvHeaderColumns); err != nil {
+-		return err
+-	}
+-	for _, resolveOutcome := range results {
+-		record := []string{resolveOutcome.NumericID, resolveOutcome.Handle, resolveOutcome.DisplayName, resolveOutcome.ResolvedAtUTC, resolveOutcome.Source, resolveOutcome.ErrorMessage}
+-		if err := w.Write(record); err != nil {
+-			return err
+-		}
+-	}
+-	return w.Error()
+-}
+-
+-func isAllDigits(s string) bool {
+-	if s == "" {
+-		return false
+-	}
+-	for _, r := range s {
+-		if r < '0' || r > '9' {
+-			return false
+-		}
+-	}
+-	return true
+-}
+-
+-func backoffFromRetryAfter(retryAfter string) time.Duration {
+-	if retryAfter == "" {
+-		return 30 * time.Second
+-	}
+-	// Header may be seconds or HTTP-date; we handle seconds here.
+-	if secs, err := strconv.Atoi(retryAfter); err == nil && secs >= 0 {
+-		return time.Duration(secs) * time.Second
+-	}
+-	return 30 * time.Second
+-}
+-
+-func max(a, b int) int {
+-	if a > b {
+-		return a
+-	}
+-	return b
+-}
+diff --git a/tests/xresolve_integration_test.go b/tests/xresolve_integration_test.go
+deleted file mode 100644
+index 91ef304..0000000
+--- a/tests/xresolve_integration_test.go
++++ /dev/null
+@@ -1,254 +0,0 @@
+-package tests
+-
+-import (
+-	"bytes"
+-	"context"
+-	"encoding/csv"
+-	"errors"
+-	"flag"
+-	"fmt"
+-	"os"
+-	"os/exec"
+-	"path/filepath"
+-	"strings"
+-	"testing"
+-	"time"
+-
+-	"github.com/f-sync/fsync/internal/handles"
+-)
+-
+-const (
+-	integrationFlagName                                   = "twitter_integration"
+-	integrationFlagDescription                            = "enable live Twitter intent resolution integration test"
+-	integrationFlagDisabledMessage                        = "twitter integration test skipped because the flag is disabled"
+-	integrationChromeUnavailableMessage                   = "twitter integration test skipped because no Chrome binary is available"
+-	integrationSkipMessageFormat                          = "%s: %v"
+-	integrationChromeEmptyPathMessage                     = "resolved empty chrome binary path"
+-	integrationCommandTimeoutSeconds                      = 120
+-	integrationCommandGoBinary                            = "go"
+-	integrationCommandRunArg                              = "run"
+-	integrationCommandModulePath                          = "./cmd/xresolve"
+-	integrationCommandInputFlag                           = "--in"
+-	integrationCommandOutputFlag                          = "--out"
+-	integrationCommandConcurrencyFlag                     = "--concurrency"
+-	integrationCommandSleepMillisFlag                     = "--sleep-ms"
+-	integrationCommandConcurrencyValue                    = "1"
+-	integrationCommandSleepMillisValue                    = "0"
+-	integrationInputFileName                              = "ids.txt"
+-	integrationOutputFileName                             = "results.csv"
+-	integrationInputLineSeparator                         = "\n"
+-	integrationInputFilePermission            os.FileMode = 0o600
+-	integrationRepositoryRootRelativePath                 = ".."
+-	integrationCommandRunErrorFormat                      = "execute xresolve CLI: %v\n%s"
+-	integrationRepositoryRootErrorFormat                  = "resolve repository root: %v"
+-	integrationInputWriteErrorFormat                      = "write integration input file: %v"
+-	integrationCSVParseErrorFormat                        = "parse CLI CSV output: %v"
+-	integrationCSVOpenErrorFormat                         = "open xresolve CSV output %s: %v"
+-	integrationCSVReadErrorFormat                         = "read xresolve CSV output %s: %v"
+-	integrationCSVEmptyMessage                            = "xresolve CSV output did not contain any rows"
+-	integrationCSVMissingColumnFormat                     = "xresolve CSV output missing required column %s"
+-	integrationCSVRowLengthFormat                         = "xresolve CSV row had insufficient columns: %v"
+-	integrationCSVRecordMissingFormat                     = "xresolve CSV output missing record for %s"
+-	integrationCSVUnexpectedHandleFormat                  = "expected handle %s, got %s"
+-	integrationCSVUnexpectedDisplayNameFormat             = "expected display name %s, got %s"
+-	integrationEnvAssignmentFormat                        = "%s=%s"
+-	integrationBackendEnvVariableName                     = "XRESOLVE_BACKEND"
+-	integrationBackendEnvVariableValue                    = "cresolve"
+-	integrationCSVColumnID                                = "id"
+-	integrationCSVColumnHandle                            = "handle"
+-	integrationCSVColumnDisplayName                       = "display_name"
+-	integrationTestCaseNameElon                           = "resolve elon musk via xresolve CLI"
+-	integrationAccountIDElon                              = "44196397"
+-	integrationExpectedHandleElon                         = "elonmusk"
+-	integrationExpectedDisplayNameElon                    = "Elon Musk"
+-)
+-
+-var integrationRunFlag = flag.Bool(integrationFlagName, false, integrationFlagDescription)
+-
+-// xresolveIntegrationTestCase defines a CLI integration scenario for xresolve.
+-type xresolveIntegrationTestCase struct {
+-	scenarioName    string
+-	numericIDs      []string
+-	expectedRecords map[string]expectedCSVRecord
+-}
+-
+-// expectedCSVRecord captures the expected handle metadata for a numeric ID.
+-type expectedCSVRecord struct {
+-	handle      string
+-	displayName string
+-}
+-
+-// csvResolutionRecord represents a parsed CSV row from the xresolve CLI output.
+-type csvResolutionRecord struct {
+-	handle      string
+-	displayName string
+-}
+-
+-// csvResolutionResults stores CSV resolution records keyed by numeric ID.
+-type csvResolutionResults struct {
+-	records map[string]csvResolutionRecord
+-}
+-
+-// TestXResolveCLIIntegration verifies that the xresolve CLI resolves handles using the cresolve backend.
+-func TestXResolveCLIIntegration(t *testing.T) {
+-	if !*integrationRunFlag {
+-		t.Skip(integrationFlagDisabledMessage)
+-	}
+-
+-	chromeBinaryPath, chromeErr := resolveChromeBinaryPathForIntegration()
+-	if chromeErr != nil {
+-		t.Skipf(integrationSkipMessageFormat, integrationChromeUnavailableMessage, chromeErr)
+-	}
+-
+-	repositoryRootPath, repositoryErr := filepath.Abs(integrationRepositoryRootRelativePath)
+-	if repositoryErr != nil {
+-		t.Fatalf(integrationRepositoryRootErrorFormat, repositoryErr)
+-	}
+-
+-	integrationScenarios := []xresolveIntegrationTestCase{
+-		{
+-			scenarioName: integrationTestCaseNameElon,
+-			numericIDs:   []string{integrationAccountIDElon},
+-			expectedRecords: map[string]expectedCSVRecord{
+-				integrationAccountIDElon: {
+-					handle:      integrationExpectedHandleElon,
+-					displayName: integrationExpectedDisplayNameElon,
+-				},
+-			},
+-		},
+-	}
+-
+-	for _, integrationScenario := range integrationScenarios {
+-		integrationScenario := integrationScenario
+-		t.Run(integrationScenario.scenarioName, func(t *testing.T) {
+-			commandContext, cancel := context.WithTimeout(context.Background(), time.Duration(integrationCommandTimeoutSeconds)*time.Second)
+-			defer cancel()
+-
+-			temporaryDirectory := t.TempDir()
+-			inputFilePath := filepath.Join(temporaryDirectory, integrationInputFileName)
+-			outputFilePath := filepath.Join(temporaryDirectory, integrationOutputFileName)
+-
+-			inputContent := strings.Join(integrationScenario.numericIDs, integrationInputLineSeparator) + integrationInputLineSeparator
+-			if writeErr := os.WriteFile(inputFilePath, []byte(inputContent), integrationInputFilePermission); writeErr != nil {
+-				t.Fatalf(integrationInputWriteErrorFormat, writeErr)
+-			}
+-
+-			commandArguments := []string{
+-				integrationCommandRunArg,
+-				integrationCommandModulePath,
+-				integrationCommandInputFlag,
+-				inputFilePath,
+-				integrationCommandOutputFlag,
+-				outputFilePath,
+-				integrationCommandConcurrencyFlag,
+-				integrationCommandConcurrencyValue,
+-				integrationCommandSleepMillisFlag,
+-				integrationCommandSleepMillisValue,
+-			}
+-
+-			command := exec.CommandContext(commandContext, integrationCommandGoBinary, commandArguments...)
+-			command.Dir = repositoryRootPath
+-
+-			environmentVariables := append([]string{}, os.Environ()...)
+-			environmentVariables = append(environmentVariables, fmt.Sprintf(integrationEnvAssignmentFormat, handles.ChromeBinaryEnvironmentVariable, chromeBinaryPath))
+-			environmentVariables = append(environmentVariables, fmt.Sprintf(integrationEnvAssignmentFormat, integrationBackendEnvVariableName, integrationBackendEnvVariableValue))
+-			command.Env = environmentVariables
+-
+-			var commandOutput bytes.Buffer
+-			command.Stdout = &commandOutput
+-			command.Stderr = &commandOutput
+-
+-			if runErr := command.Run(); runErr != nil {
+-				t.Fatalf(integrationCommandRunErrorFormat, runErr, commandOutput.String())
+-			}
+-
+-			results, parseErr := loadCSVResults(outputFilePath)
+-			if parseErr != nil {
+-				t.Fatalf(integrationCSVParseErrorFormat, parseErr)
+-			}
+-
+-			results.assertMatches(t, integrationScenario.expectedRecords)
+-		})
+-	}
+-}
+-
+-func resolveChromeBinaryPathForIntegration() (string, error) {
+-	resolvedPath := handles.ResolveChromeBinaryPath(handles.Config{})
+-	trimmedPath := strings.TrimSpace(resolvedPath)
+-	if trimmedPath == "" {
+-		return "", errors.New(integrationChromeEmptyPathMessage)
+-	}
+-	if strings.ContainsRune(trimmedPath, os.PathSeparator) {
+-		if _, statErr := os.Stat(trimmedPath); statErr != nil {
+-			return "", statErr
+-		}
+-		return trimmedPath, nil
+-	}
+-	lookedPath, lookErr := exec.LookPath(trimmedPath)
+-	if lookErr != nil {
+-		return "", lookErr
+-	}
+-	return lookedPath, nil
+-}
+-
+-func loadCSVResults(csvPath string) (csvResolutionResults, error) {
+-	file, openErr := os.Open(csvPath)
+-	if openErr != nil {
+-		return csvResolutionResults{}, fmt.Errorf(integrationCSVOpenErrorFormat, csvPath, openErr)
+-	}
+-	defer file.Close()
+-
+-	reader := csv.NewReader(file)
+-	reader.FieldsPerRecord = -1
+-	records, readErr := reader.ReadAll()
+-	if readErr != nil {
+-		return csvResolutionResults{}, fmt.Errorf(integrationCSVReadErrorFormat, csvPath, readErr)
+-	}
+-	if len(records) == 0 {
+-		return csvResolutionResults{}, errors.New(integrationCSVEmptyMessage)
+-	}
+-
+-	header := records[0]
+-	columnIndices := make(map[string]int, len(header))
+-	for index, columnName := range header {
+-		columnIndices[columnName] = index
+-	}
+-
+-	requiredColumns := []string{integrationCSVColumnID, integrationCSVColumnHandle, integrationCSVColumnDisplayName}
+-	for _, columnName := range requiredColumns {
+-		if _, exists := columnIndices[columnName]; !exists {
+-			return csvResolutionResults{}, fmt.Errorf(integrationCSVMissingColumnFormat, columnName)
+-		}
+-	}
+-
+-	results := csvResolutionResults{records: make(map[string]csvResolutionRecord, len(records)-1)}
+-	idIndex := columnIndices[integrationCSVColumnID]
+-	handleIndex := columnIndices[integrationCSVColumnHandle]
+-	displayNameIndex := columnIndices[integrationCSVColumnDisplayName]
+-	for _, row := range records[1:] {
+-		if len(row) <= idIndex || len(row) <= handleIndex || len(row) <= displayNameIndex {
+-			return csvResolutionResults{}, fmt.Errorf(integrationCSVRowLengthFormat, row)
+-		}
+-		numericID := strings.TrimSpace(row[idIndex])
+-		handleValue := strings.TrimSpace(row[handleIndex])
+-		displayNameValue := strings.TrimSpace(row[displayNameIndex])
+-		results.records[numericID] = csvResolutionRecord{handle: handleValue, displayName: displayNameValue}
+-	}
+-	return results, nil
+-}
+-
+-func (results csvResolutionResults) assertMatches(t *testing.T, expectations map[string]expectedCSVRecord) {
+-	t.Helper()
+-	for numericID, expectation := range expectations {
+-		record, exists := results.records[numericID]
+-		if !exists {
+-			t.Fatalf(integrationCSVRecordMissingFormat, numericID)
+-		}
+-		if record.handle != expectation.handle {
+-			t.Fatalf(integrationCSVUnexpectedHandleFormat, expectation.handle, record.handle)
+-		}
+-		if record.displayName != expectation.displayName {
+-			t.Fatalf(integrationCSVUnexpectedDisplayNameFormat, expectation.displayName, record.displayName)
+-		}
+-	}
+-}
