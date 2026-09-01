@@ -1,12 +1,17 @@
 # Commercial Licensing
 
-This notice applies to the software and associated documentation distributed in
-the `MarcoPoloResearchLab/X-sync` repository at
-<https://github.com/MarcoPoloResearchLab/X-sync>.
+This notice applies to the Covered Materials in the version of the
+`MarcoPoloResearchLab/X-sync` repository at <https://github.com/MarcoPoloResearchLab/X-sync> distributed with this notice.
 
-The proprietary license in `LICENSE` grants no public right to use the
-Software. Access or use is available only through a separate written agreement
-with Marco Polo Research Lab LLC.
+The proprietary rights notice in `LICENSE` grants no additional public right
+to use the Covered Materials. Additional rights may be available only through
+a separate written agreement with Marco Polo Research Lab LLC, solely for materials that
+Marco Polo Research Lab LLC owns or has sufficient authority to license.
+
+Third-party and separately licensed materials remain governed by their own
+terms. Contributions may be included in a commercial license only to the extent
+that `CONTRIBUTOR_LICENSE.md` or another written agreement grants sufficient
+commercial relicensing rights.
 
 To request commercial licensing terms, contact legal@mprlab.com.
 
